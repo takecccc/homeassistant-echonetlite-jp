@@ -1,293 +1,399 @@
 from __future__ import annotations
 
 import argparse
-import binascii
+import asyncio
 import ipaddress
-import socket
-import struct
-import time
-from dataclasses import dataclass
-
-ECHONET_PORT = 3610
-ECHONET_MULTICAST = "224.0.23.0"
-EHD1 = 0x10
-EHD2 = 0x81
-
-# Controller class object (used as sender object)
-SEOJ_CONTROLLER = bytes.fromhex("05FF01")
-# Node profile class object
-EOJ_NODE_PROFILE = bytes.fromhex("0EF001")
-
-ESV_GET = 0x62
-ESV_GET_RES = 0x72
-ESV_INF = 0x73
+import json
+from datetime import datetime, timezone
+from typing import Any
 
 
-@dataclass
-class EchonetFrame:
-    tid: int
-    seoj: bytes
-    deoj: bytes
-    esv: int
-    opc: int
-    epc: int
-    pdc: int
-    edt: bytes
+def parse_eoj(eoj: str) -> tuple[int, int, int]:
+    raw = eoj.strip().lower().removeprefix("0x")
+    if len(raw) != 6:
+        raise ValueError("EOJ must be 3-byte hex (example: 028801)")
+    return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
 
 
-def hex3(value: bytes) -> str:
-    return value.hex().upper()
+def parse_eoj_candidates(raw: str) -> list[str]:
+    if not raw.strip():
+        return []
+    items = [item.strip().upper() for item in raw.split(",") if item.strip()]
+    if not items:
+        return []
+    parsed: list[str] = []
+    for item in items:
+        gc, cc, ci = parse_eoj(item)
+        parsed.append(f"{gc:02X}{cc:02X}{ci:02X}")
+    return sorted(set(parsed))
 
 
-def parse_hex_byte(value: str, name: str) -> int:
-    s = value.strip().lower().removeprefix("0x")
-    if len(s) != 2:
-        raise ValueError(f"{name} must be 1 byte hex (e.g. 80)")
-    return int(s, 16)
+def normalize_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): normalize_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [normalize_json(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
-def parse_hex_eoj(value: str) -> bytes:
-    s = value.strip().lower().removeprefix("0x")
-    if len(s) != 6:
-        raise ValueError("EOJ must be 3 bytes hex (e.g. 028801)")
-    return bytes.fromhex(s)
+def filter_by_cidr(hosts: list[str], cidr: str) -> list[str]:
+    network = ipaddress.ip_network(cidr, strict=False)
+    if network.version != 4:
+        raise ValueError("Only IPv4 CIDR is supported for scan-hosts.")
+    filtered: list[str] = []
+    for host in hosts:
+        if ipaddress.ip_address(host) in network:
+            filtered.append(host)
+    return filtered
 
 
-def build_get_frame(tid: int, deoj: bytes, epc: int) -> bytes:
-    return b"".join(
-        [
-            bytes([EHD1, EHD2]),
-            struct.pack(">H", tid),
-            SEOJ_CONTROLLER,
-            deoj,
-            bytes([ESV_GET]),
-            bytes([0x01]),  # OPC
-            bytes([epc]),
-            bytes([0x00]),  # PDC
-        ]
+def list_eojs_for_host(state: dict[str, Any], host: str) -> list[str]:
+    instances = state.get(host, {}).get("instances", {})
+    eojs: list[str] = []
+    for eoj_gc, by_cc in instances.items():
+        for eoj_cc, by_ci in by_cc.items():
+            for eoj_ci in by_ci.keys():
+                eojs.append(f"{int(eoj_gc):02X}{int(eoj_cc):02X}{int(eoj_ci):02X}")
+    eojs.sort()
+    return eojs
+
+
+def describe_eoj(eoj: str) -> str:
+    from pychonet.lib.eojx import EOJX_CLASS
+    from pychonet.lib.eojx import EOJX_GROUP
+
+    gc, cc, _ci = parse_eoj(eoj)
+    group_name = EOJX_GROUP.get(gc, f"Unknown group 0x{gc:02X}")
+    class_name = EOJX_CLASS.get(gc, {}).get(cc, f"Unknown class 0x{cc:02X}")
+    return f"{group_name} / {class_name}"
+
+
+def describe_epc(eoj: str, epc: int) -> str:
+    from pychonet.lib.epc import EPC_CODE
+
+    gc, cc, _ci = parse_eoj(eoj)
+    name = EPC_CODE.get(gc, {}).get(cc, {}).get(epc)
+    if name is None:
+        return f"0x{epc:02X}(unknown)"
+    return f"0x{epc:02X}({name})"
+
+
+def format_epc_lines(eoj: str, epcs: list[int]) -> list[str]:
+    if not epcs:
+        return ["      - (none)"]
+    return [f"      - {describe_epc(eoj, epc)}" for epc in epcs]
+
+
+def get_instance_maps(state: dict[str, Any], host: str, eoj: str) -> tuple[list[int], list[int], list[int]]:
+    gc, cc, ci = parse_eoj(eoj)
+    instance = state.get(host, {}).get("instances", {}).get(gc, {}).get(cc, {}).get(ci, {})
+    stat_map = instance.get(0x9D, []) or []
+    set_map = instance.get(0x9E, []) or []
+    get_map = instance.get(0x9F, []) or []
+    return list(stat_map), list(set_map), list(get_map)
+
+
+def get_instance_state(
+    state: dict[str, Any], host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int
+) -> dict[int, Any]:
+    return (
+        state.get(host, {})
+        .get("instances", {})
+        .get(eoj_gc, {})
+        .get(eoj_cc, {})
+        .get(eoj_ci, {})
     )
 
 
-def parse_frame(packet: bytes) -> EchonetFrame:
-    if len(packet) < 14:
-        raise ValueError("frame too short")
-    if packet[0] != EHD1 or packet[1] != EHD2:
-        raise ValueError("not ECHONET Lite format 1")
+async def fetch_current_raw_payload(
+    client: Any, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int
+) -> dict[str, Any]:
+    from pychonet.lib.const import GET
 
-    tid = struct.unpack(">H", packet[2:4])[0]
-    seoj = packet[4:7]
-    deoj = packet[7:10]
-    esv = packet[10]
-    opc = packet[11]
+    state = getattr(client, "_state", {})
+    instance = get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
+    get_map = sorted(set(instance.get(0x9F, []) or []))
+    if not get_map:
+        return {}
 
-    if opc < 1:
-        raise ValueError("OPC=0 not supported in this script")
-    epc = packet[12]
-    pdc = packet[13]
-    if len(packet) < 14 + pdc:
-        raise ValueError("invalid PDC")
-    edt = packet[14 : 14 + pdc]
-
-    return EchonetFrame(
-        tid=tid,
-        seoj=seoj,
-        deoj=deoj,
-        esv=esv,
-        opc=opc,
-        epc=epc,
-        pdc=pdc,
-        edt=edt,
-    )
-
-
-def open_socket(timeout_sec: float) -> socket.socket:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("", ECHONET_PORT))
-    sock.settimeout(timeout_sec)
-
-    # Join ECHONET Lite multicast group to receive discovery responses.
-    mreq = struct.pack("=4s4s", socket.inet_aton(ECHONET_MULTICAST), socket.inet_aton("0.0.0.0"))
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-    return sock
-
-
-def send_get(sock: socket.socket, host: str, deoj: bytes, epc: int, tid: int) -> None:
-    frame = build_get_frame(tid=tid, deoj=deoj, epc=epc)
-    sock.sendto(frame, (host, ECHONET_PORT))
-
-
-def recv_until_timeout(sock: socket.socket, seconds: float) -> list[tuple[bytes, tuple[str, int]]]:
-    deadline = time.monotonic() + seconds
-    out: list[tuple[bytes, tuple[str, int]]] = []
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return out
-        sock.settimeout(remaining)
+    payload: dict[str, Any] = {}
+    failures: list[str] = []
+    for epc in get_map:
+        key = f"0x{epc:02X}"
         try:
-            packet, addr = sock.recvfrom(2048)
-            out.append((packet, addr))
-        except TimeoutError:
-            return out
-
-
-def decode_instance_list_s(edt: bytes) -> list[str]:
-    if not edt:
-        return []
-    count = edt[0]
-    body = edt[1:]
-    if len(body) < count * 3:
-        return []
-    return [body[i : i + 3].hex().upper() for i in range(0, count * 3, 3)]
-
-
-def decode_property_map(edt: bytes) -> list[int]:
-    if not edt:
-        return []
-    count = edt[0]
-    if count <= 16:
-        return list(edt[1 : 1 + count])
-
-    # Bitmap format for 0x80-0xFF region
-    if len(edt) < 17:
-        return []
-    bitmap = edt[1:17]
-    epcs: list[int] = []
-    for i in range(16):
-        for bit in range(8):
-            if bitmap[i] & (1 << bit):
-                epc = 0x80 + i * 8 + bit
-                epcs.append(epc)
-    return epcs
-
-
-def cmd_discover(args: argparse.Namespace) -> int:
-    tid = args.tid
-    with open_socket(timeout_sec=args.timeout) as sock:
-        send_get(sock, ECHONET_MULTICAST, EOJ_NODE_PROFILE, epc=0xD6, tid=tid)
-        packets = recv_until_timeout(sock, args.timeout)
-
-    if not packets:
-        print("No response. Check network segment, multicast reachability, and device power.")
-        return 1
-
-    seen = set()
-    for packet, (host, _) in packets:
-        try:
-            frame = parse_frame(packet)
-        except ValueError:
-            continue
-        key = (host, frame.seoj, frame.epc, frame.esv, frame.edt)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        if frame.epc == 0xD6 and frame.esv in (ESV_GET_RES, ESV_INF):
-            instances = decode_instance_list_s(frame.edt)
-            print(f"{host} SEOJ={hex3(frame.seoj)} instances={instances}")
-        else:
-            print(
-                f"{host} SEOJ={hex3(frame.seoj)} ESV=0x{frame.esv:02X} "
-                f"EPC=0x{frame.epc:02X} EDT={binascii.hexlify(frame.edt).decode().upper()}"
+            ok = await client.echonetMessage(
+                host,
+                eoj_gc,
+                eoj_cc,
+                eoj_ci,
+                GET,
+                [{"EPC": epc}],
             )
+            if not ok:
+                failures.append(f"{key}:timeout")
+                continue
+            state = getattr(client, "_state", {})
+            instance = get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
+            value = instance.get(epc)
+            if isinstance(value, (bytes, bytearray)):
+                payload[key] = value.hex().upper()
+            else:
+                payload[key] = value
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{key}:{type(exc).__name__}")
+
+    if failures:
+        payload["_errors"] = failures
+    return payload
+
+
+async def collect_loop(args: argparse.Namespace) -> int:
+    from pychonet import ECHONETAPIClient
+    from pychonet import Factory
+    from pychonet.lib.udpserver import UDPServer
+
+    eoj_gc, eoj_cc, eoj_ci = parse_eoj(args.eoj)
+
+    udp = UDPServer()
+    loop = asyncio.get_running_loop()
+    udp.run(args.listen_host, args.listen_port, loop=loop)
+    client = ECHONETAPIClient(server=udp)
+
+    await client.discover(args.host)
+    await client.getAllPropertyMaps(args.host, eoj_gc, eoj_cc, eoj_ci)
+    device = Factory(args.host, client, eoj_gc, eoj_cc, eoj_ci)
+
+    while True:
+        try:
+            payload = await device.update()
+            if not isinstance(payload, dict):
+                payload = {"value": str(payload)}
+        except Exception as exc:  # noqa: BLE001
+            print(f"collect warn: update() failed ({type(exc).__name__}: {exc}), fallback to raw EPC")
+            try:
+                payload = await fetch_current_raw_payload(client, args.host, eoj_gc, eoj_cc, eoj_ci)
+                if not payload:
+                    payload = {"value": "no data (empty get-map)"}
+            except Exception as raw_exc:  # noqa: BLE001
+                print(f"collect error: {type(raw_exc).__name__}: {raw_exc}")
+                if args.once:
+                    break
+                await asyncio.sleep(args.interval)
+                continue
+
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            print(f"host={args.host} eoj={args.eoj} at={now}")
+            print(json.dumps(normalize_json(payload), ensure_ascii=False, sort_keys=True))
+        except Exception as exc:  # noqa: BLE001
+            print(f"collect error: {type(exc).__name__}: {exc}")
+
+        if args.once:
+            break
+        await asyncio.sleep(args.interval)
     return 0
 
 
-def cmd_get(args: argparse.Namespace) -> int:
-    ipaddress.ip_address(args.host)
-    deoj = parse_hex_eoj(args.deoj)
-    epc = parse_hex_byte(args.epc, "EPC")
+async def scan_hosts_loop(args: argparse.Namespace) -> int:
+    from pychonet import ECHONETAPIClient
+    from pychonet.lib.const import ENL_MULTICAST_ADDRESS
+    from pychonet.lib.udpserver import UDPServer
 
-    with open_socket(timeout_sec=args.timeout) as sock:
-        send_get(sock, args.host, deoj, epc=epc, tid=args.tid)
-        packets = recv_until_timeout(sock, args.timeout)
+    eoj_candidates = parse_eoj_candidates(args.eoj)
+    udp = UDPServer()
+    loop = asyncio.get_running_loop()
+    udp.run(args.listen_host, args.listen_port, loop=loop)
+    client = ECHONETAPIClient(server=udp)
+    discovered_hosts: set[str] = set()
 
-    for packet, (host, _) in packets:
-        if host != args.host:
-            continue
-        try:
-            frame = parse_frame(packet)
-        except ValueError:
-            continue
-        if frame.tid != args.tid:
-            continue
-        if frame.epc != epc:
-            continue
+    async def on_unknown_host(host: str) -> None:
+        if host in {ENL_MULTICAST_ADDRESS, args.listen_host}:
+            return
+        discovered_hosts.add(host)
 
-        edt_hex = frame.edt.hex().upper()
+    client._discover_callback = on_unknown_host
+
+    # Multicast discovery to 224.0.23.0, then inspect discovered hosts.
+    if args.verbose:
         print(
-            f"host={host} SEOJ={hex3(frame.seoj)} DEOJ={hex3(frame.deoj)} "
-            f"ESV=0x{frame.esv:02X} EPC=0x{frame.epc:02X} EDT={edt_hex}"
+            "multicast discovery started "
+            f"(wait={args.discovery_wait:.1f}s, target=224.0.23.0:3610)"
         )
+    discover_task = asyncio.create_task(client.discover())
+    step = 0.5
+    elapsed = 0.0
+    while elapsed < args.discovery_wait:
+        await asyncio.sleep(step)
+        elapsed = min(args.discovery_wait, elapsed + step)
+        if args.verbose:
+            current = len(discovered_hosts)
+            print(
+                f"discovery progress: {elapsed:.1f}/{args.discovery_wait:.1f}s "
+                f"responded_hosts={current}"
+            )
+
+    if not discover_task.done():
+        discover_task.cancel()
+        try:
+            await discover_task
+        except asyncio.CancelledError:
+            pass
+    else:
+        # Consume result/exception to avoid task warnings.
+        _ = discover_task.exception()
+    state = getattr(client, "_state", {})
+    initial_hosts = set(discovered_hosts)
+    hosts = sorted(initial_hosts)
+
+    if args.cidr:
+        hosts = filter_by_cidr(hosts, args.cidr)
+    if args.limit and args.limit > 0:
+        hosts = hosts[: args.limit]
+
+    if not hosts:
+        message = "no ECHONET host responded to multicast discovery"
+        if args.cidr:
+            message += f" in {args.cidr}"
+        print(message)
+        return 1
+
+    if args.verbose:
+        print(f"enriching node profile by unicast discover(host): {len(hosts)} host(s)")
+    for idx, host in enumerate(hosts, start=1):
+        try:
+            await asyncio.wait_for(client.discover(host), timeout=args.timeout)
+        except Exception as exc:  # noqa: BLE001
+            if args.verbose:
+                print(f"discover(host) failed host={host} ({type(exc).__name__}: {exc})")
+        if args.verbose and idx % 20 == 0:
+            print(f"discover(host) progress: {idx}/{len(hosts)}")
+
+    state = getattr(client, "_state", {})
+
+    for host in hosts:
+        eojs = list_eojs_for_host(state, host)
+        print(f"discovered host={host}")
+        if not eojs:
+            print("  - (no EOJ instances)")
+            continue
+        for eoj in eojs:
+            print(f"  - eoj={eoj} desc={describe_eoj(eoj)}")
+            try:
+                gc, cc, ci = parse_eoj(eoj)
+                await asyncio.wait_for(
+                    client.getAllPropertyMaps(host, gc, cc, ci),
+                    timeout=args.timeout,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if args.verbose:
+                    print(f"    maps: failed ({type(exc).__name__}: {exc})")
+                continue
+
+            state = getattr(client, "_state", {})
+            stat_map, set_map, get_map = get_instance_maps(state, host, eoj)
+            stat_map = sorted(set(stat_map))
+            set_map = sorted(set(set_map))
+            get_map = sorted(set(get_map))
+            print("    inf-map(0x9D):")
+            for line in format_epc_lines(eoj, stat_map):
+                print(line)
+            print("    set-map(0x9E):")
+            for line in format_epc_lines(eoj, set_map):
+                print(line)
+            print("    get-map(0x9F):")
+            for line in format_epc_lines(eoj, get_map):
+                print(line)
+
+    if not eoj_candidates:
+        print("object listing complete")
         return 0
 
-    print("No matching response. Confirm EOJ/EPC, host IP, and timeout.")
-    return 1
-
-
-def cmd_get_map(args: argparse.Namespace) -> int:
-    ipaddress.ip_address(args.host)
-    deoj = parse_hex_eoj(args.deoj)
-    epcs = [0x9D, 0x9E, 0x9F]
-
-    rc = 0
-    for epc in epcs:
-        with open_socket(timeout_sec=args.timeout) as sock:
-            send_get(sock, args.host, deoj, epc=epc, tid=args.tid + epc)
-            packets = recv_until_timeout(sock, args.timeout)
-
-        matched = False
-        for packet, (host, _) in packets:
-            if host != args.host:
+    listed = 0
+    for host in hosts:
+        eojs = list_eojs_for_host(state, host)
+        if eoj_candidates:
+            eojs = [eoj for eoj in eojs if eoj in eoj_candidates]
+            if not eojs:
                 continue
-            try:
-                frame = parse_frame(packet)
-            except ValueError:
-                continue
-            if frame.epc != epc:
-                continue
-            props = decode_property_map(frame.edt)
-            print(f"EPC 0x{epc:02X}: {[f'0x{x:02X}' for x in props]}")
-            matched = True
-            break
-        if not matched:
-            print(f"EPC 0x{epc:02X}: no response")
-            rc = 1
-    return rc
+        listed += 1
+        print(host)
+
+    if listed == 0:
+        if eoj_candidates:
+            print(f"no host matched eojs={eoj_candidates}")
+        else:
+            print("no host has instance list")
+        return 1
+    print(f"scan complete: {listed} host(s)")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="ECHONET Lite helper for local HEMS devices")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(
+        description="Collect and display current ECHONET Lite values with pychonet"
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_discover = sub.add_parser("discover", help="Discover nodes and instance list (EPC 0xD6)")
-    p_discover.add_argument("--timeout", type=float, default=3.0)
-    p_discover.add_argument("--tid", type=lambda x: int(x, 0), default=0x1001)
-    p_discover.set_defaults(func=cmd_discover)
+    p_collect = sub.add_parser("collect", help="Fetch and display current values")
+    p_collect.add_argument("--host", required=True, help="Target device IPv4 address")
+    p_collect.add_argument("--eoj", default="028801", help="Target EOJ hex (default: 028801)")
+    p_collect.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
+    p_collect.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")
+    p_collect.add_argument("--interval", type=float, default=30.0, help="Polling interval seconds")
+    p_collect.add_argument("--once", action="store_true", help="Collect only once")
+    p_collect.set_defaults(func=None)
 
-    p_get = sub.add_parser("get", help="Get one EPC from target EOJ")
-    p_get.add_argument("--host", required=True, help="Target IPv4 address")
-    p_get.add_argument("--deoj", required=True, help="Target EOJ (example: 028801)")
-    p_get.add_argument("--epc", required=True, help="Target EPC (example: 80)")
-    p_get.add_argument("--timeout", type=float, default=2.0)
-    p_get.add_argument("--tid", type=lambda x: int(x, 0), default=0x2001)
-    p_get.set_defaults(func=cmd_get)
+    p_scan = sub.add_parser(
+        "scan-hosts",
+        help="Discover hosts by multicast and list reachable ECHONET hosts",
+    )
+    p_scan.add_argument(
+        "--cidr",
+        default="",
+        help="Optional IPv4 CIDR filter for discovered hosts (example: 192.168.1.0/24)",
+    )
+    p_scan.add_argument(
+        "--eoj",
+        default="",
+        help="Optional EOJ filter list (comma-separated). Omit to list all discovered objects.",
+    )
+    p_scan.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
+    p_scan.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")
+    p_scan.add_argument(
+        "--discovery-wait",
+        type=float,
+        default=2.0,
+        help="Seconds to wait for multicast discovery responses",
+    )
+    p_scan.add_argument(
+        "--timeout",
+        type=float,
+        default=2.0,
+        help="Timeout seconds for discover(host) and getAllPropertyMaps",
+    )
+    p_scan.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Max discovered hosts to list (0 = all discovered hosts)",
+    )
+    p_scan.add_argument("--verbose", action="store_true", help="Show multicast discovery progress")
+    p_scan.set_defaults(func=None)
 
-    p_map = sub.add_parser("get-map", help="Get property maps EPC 0x9D/0x9E/0x9F")
-    p_map.add_argument("--host", required=True, help="Target IPv4 address")
-    p_map.add_argument("--deoj", required=True, help="Target EOJ (example: 028801)")
-    p_map.add_argument("--timeout", type=float, default=2.0)
-    p_map.add_argument("--tid", type=lambda x: int(x, 0), default=0x3000)
-    p_map.set_defaults(func=cmd_get_map)
-
-    return p
+    return parser
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+
+    if args.cmd == "collect":
+        return asyncio.run(collect_loop(args))
+    if args.cmd == "scan-hosts":
+        return asyncio.run(scan_hosts_loop(args))
+    return 0
 
 
 if __name__ == "__main__":

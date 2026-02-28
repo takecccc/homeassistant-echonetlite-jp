@@ -1,10 +1,12 @@
 [project]
 name = "hems-echonet"
 version = "0.1.0"
-description = "Minimal ECHONET Lite client for local HEMS devices"
+description = "Fetch and display Smart Cosmo ECHONET Lite values with pychonet"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "pychonet>=2.6.18",
+]
 
 [tool.uv]
 package = false

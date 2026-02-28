@@ -1,11 +1,6 @@
-# Smart Cosmo (ECHONET Lite) 取得サンプル
+# Smart Cosmo Monitor (pychonet)
 
-家庭内ネットワーク上の ECHONET Lite 機器に対して、Python で UDP/3610 を使い情報取得する最小サンプルです。  
-`uv` でセットアップし、以下を実行できます。
-
-- ノード探索 (`discover`)
-- 任意 EOJ/EPC の GET (`get`)
-- プロパティマップ取得 (`get-map`)
+`pychonet` を使って ECHONET Lite 機器（Smart Cosmo 想定）を探索し、現在値を表示する最小構成です。
 
 ## 1. セットアップ
 
@@ -13,42 +8,55 @@
 uv sync
 ```
 
-## 2. 実行
-
-### 2-1. ネットワーク上のノード探索
+ネットワーク制限のある環境では次を使います。
 
 ```bash
-uv run python -m hems_echonet.main discover --timeout 4
+UV_CACHE_DIR=/tmp/uv-cache uv sync
 ```
 
-`EPC 0xD6` (インスタンスリストS) を使って、応答したノードの EOJ 一覧を表示します。
+## 2. 現在値の取得
 
-### 2-2. 特定機器から 1 つの EPC を取得
+### 2-1. 1回だけ取得
 
 ```bash
-uv run python -m hems_echonet.main get --host 192.168.1.50 --deoj 028801 --epc E7
+uv run python -m hems_echonet.main collect --host 192.168.1.50 --eoj 028801 --once
 ```
 
-- `--host`: 対象機器IP
-- `--deoj`: 対象オブジェクトEOJ (3バイトhex)
-- `--epc`: 読み出したいEPC (1バイトhex)
-
-### 2-3. GET可能/SET可能/通知可能 EPC の確認
+### 2-2. 定期取得（30秒間隔）
 
 ```bash
-uv run python -m hems_echonet.main get-map --host 192.168.1.50 --deoj 028801
+uv run python -m hems_echonet.main collect --host 192.168.1.50 --eoj 028801 --interval 30
 ```
 
-`EPC 0x9D/0x9E/0x9F` を取得して、対応 EPC 一覧を表示します。
+## 3. LAN内ホスト探索
 
-## Smart Cosmo 向けの進め方
+ECHONET Lite のマルチキャスト探索で応答ホストとオブジェクト一覧（EOJ）を取得します。
 
-1. まず `discover` で対象 IP と EOJ を確認する
-2. `get-map` で取得可能 EPC を確認する
-3. `get` で必要 EPC を順次読みに行く
+```bash
+uv run python -m hems_echonet.main scan-hosts
+```
 
-## 注意点
+必要なら、発見済みホストを CIDR / EOJ で絞り込みできます。
 
-- ECHONET Lite は通常同一L2セグメント内で通信します。
-- マルチキャスト (`224.0.23.0:3610`) が遮断されると探索できません。
-- 機器固有EPCはメーカー仕様書に依存します。
+```bash
+uv run python -m hems_echonet.main scan-hosts --cidr 192.168.1.0/24 --eoj 027901,028101,028201,028701 --verbose
+```
+
+主なオプション:
+
+- `--eoj`: 対象EOJ候補（カンマ区切り）。未指定時は全EOJを一覧表示
+- `--discovery-wait`: マルチキャスト応答待ち秒数（既定: `2.0`）
+- `--timeout`: 各ホストへの `discover(host)` と `getAllPropertyMaps` タイムアウト秒
+- `--limit`: 発見ホストのうち先頭N件のみ表示（既定: `0` = 全件）
+- `--verbose`: マルチキャスト探索中の経過時間と応答ホスト数を表示
+
+出力には EOJ の説明に加えて、以下も表示されます。
+
+- `inf-map(0x9D)`: 通知可能 EPC
+- `set-map(0x9E)`: 設定可能 EPC
+- `get-map(0x9F)`: 取得可能 EPC
+
+## 注意
+
+- `pychonet` のデコード結果は機器実装に依存します。
+- ECHONET Lite は通常同一L2セグメント内での利用が前提です。
