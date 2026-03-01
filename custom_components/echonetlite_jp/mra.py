@@ -219,12 +219,13 @@ class MRAClassResolver:
             element_node = item.get("element")
             number_schema = self._pick_schema_by_type(element_node, {"number", "level"})
             state_schema = self._pick_schema_by_type(element_node, {"state"})
-            selected = number_schema or state_schema
+            temporal_schema = self._pick_schema_by_type(element_node, {"time", "date", "date-time"})
+            selected = number_schema or state_schema or temporal_schema
             if not isinstance(selected, dict):
                 continue
 
             value_type = str(selected.get("type") or "").strip().lower()
-            if value_type not in {"number", "level", "state"}:
+            if value_type not in {"number", "level", "state", "time", "date", "date-time"}:
                 continue
             fmt = str(selected.get("format") or "").strip()
             size = self._schema_size_bytes(selected)
@@ -249,6 +250,7 @@ class MRAClassResolver:
                     "unit": unit if isinstance(unit, str) else None,
                     "multiple": multiple if isinstance(multiple, (int, float)) else None,
                     "coefficient": [str(x) for x in coefficient if isinstance(x, str)],
+                    "enum": self._extract_enum_map(state_schema) if isinstance(state_schema, dict) else {},
                     "no_data_codes": no_data_codes,
                 }
             )

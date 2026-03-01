@@ -557,30 +557,37 @@ def _decode_composite_values(
         chunk = raw[offset : offset + size]
         offset += size
 
-        if field_type not in {"number", "level"}:
-            continue
-        fmt = str(field.get("format") or "").strip().lower()
-        signed = fmt.startswith("int")
-        int_unsigned = int.from_bytes(chunk, byteorder="big", signed=False)
-        int_value = int.from_bytes(chunk, byteorder="big", signed=signed)
-        no_data_codes = field.get("no_data_codes", [])
-        if isinstance(no_data_codes, list) and int_unsigned in {c for c in no_data_codes if isinstance(c, int)}:
-            value: float | None = None
+        if field_type in {"number", "level"}:
+            fmt = str(field.get("format") or "").strip().lower()
+            signed = fmt.startswith("int")
+            int_unsigned = int.from_bytes(chunk, byteorder="big", signed=False)
+            int_value = int.from_bytes(chunk, byteorder="big", signed=signed)
+            no_data_codes = field.get("no_data_codes", [])
+            if isinstance(no_data_codes, list) and int_unsigned in {c for c in no_data_codes if isinstance(c, int)}:
+                value: float | None = None
+            else:
+                value = float(int_value)
+                multiple = field.get("multiple")
+                if isinstance(multiple, (int, float)):
+                    value *= float(multiple)
+                coef = _coefficient_factor(payload, field.get("coefficient"))
+                if coef is not None:
+                    value *= coef
+                value = round(value, 6)
+        elif field_type == "state":
+            token = chunk.hex().upper()
+            enum_map = field.get("enum", {})
+            value = enum_map.get(token) if isinstance(enum_map, dict) else token
+        elif field_type in {"time", "date", "date-time"}:
+            value = _decode_temporal_value(chunk.hex().upper(), field_type)
         else:
-            value = float(int_value)
-            multiple = field.get("multiple")
-            if isinstance(multiple, (int, float)):
-                value *= float(multiple)
-            coef = _coefficient_factor(payload, field.get("coefficient"))
-            if coef is not None:
-                value *= coef
-            value = round(value, 6)
+            continue
 
         result[key] = value
         name = str(field.get("name") or key)
         unit_raw = field.get("unit")
         unit = _UNIT_MAP.get(unit_raw, unit_raw) if isinstance(unit_raw, str) else ""
-        display_parts.append(f"{name}:{_fmt_num(value, unit)}")
+        display_parts.append(f"{name}:{_fmt_display(value, unit)}")
 
     if offset != len(raw):
         return None
@@ -775,6 +782,14 @@ def _fmt_num(value: float | int | None, unit: str) -> str:
     if value is None:
         return "N/A"
     return f"{value}{unit}"
+
+
+def _fmt_display(value: Any, unit: str) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return _fmt_num(value, unit)
+    return "N/A"
 
 
 def _normalize_epc_key(value: str) -> str | None:
