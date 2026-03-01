@@ -491,24 +491,26 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
 
 
 def _composite_field_specs(epc_key: str, meta: dict[str, Any] | None) -> list[dict[str, str]]:
-    short_name = str((meta or {}).get("short_name") or "").strip().lower()
-    if short_name == "instantaneouscurrent" or epc_key == "0xC7":
-        return [
-            {"key": "r_phase_a", "name": "R Phase Current", "unit": "A"},
-            {"key": "t_phase_a", "name": "T Phase Current", "unit": "A"},
-        ]
-    if short_name == "instantaneousvoltage" or epc_key == "0xC8":
-        return [
-            {"key": "r_s_v", "name": "R-S Voltage", "unit": "V"},
-            {"key": "s_t_v", "name": "S-T Voltage", "unit": "V"},
-        ]
-    if short_name == "measurementchannel1":
-        return [
-            {"key": "electric_energy_kwh", "name": "Channel1 Electric Energy", "unit": "kWh"},
-            {"key": "current_r_phase_a", "name": "Channel1 R Phase Current", "unit": "A"},
-            {"key": "current_t_phase_a", "name": "Channel1 T Phase Current", "unit": "A"},
-        ]
-    return []
+    fields = (meta or {}).get("object_fields", [])
+    if not isinstance(fields, list):
+        return []
+    out: list[dict[str, str]] = []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        field_type = str(field.get("type") or "").strip().lower()
+        if field_type not in {"number", "level"}:
+            continue
+        key = str(field.get("key") or "").strip()
+        if not key:
+            continue
+        name = str(field.get("name") or key).strip()
+        unit_raw = field.get("unit")
+        unit = ""
+        if isinstance(unit_raw, str) and unit_raw.strip():
+            unit = _UNIT_MAP.get(unit_raw.strip(), unit_raw.strip())
+        out.append({"key": key, "name": name, "unit": unit})
+    return out
 
 
 def _composite_field_info(epc_key: str, meta: dict[str, Any], field_key: str) -> dict[str, str]:
@@ -524,54 +526,62 @@ def _decode_composite_values(
     token = _normalize_hex_token(raw_value)
     if not token:
         return None
-    short_name = str(meta.get("short_name") or "").strip().lower()
+    fields = meta.get("object_fields", [])
+    if not isinstance(fields, list) or not fields:
+        return None
 
-    if (short_name == "instantaneouscurrent" or epc_key == "0xC7") and len(token) == 8:
+    try:
         raw = bytes.fromhex(token)
-        r = int.from_bytes(raw[0:2], byteorder="big", signed=True)
-        t = int.from_bytes(raw[2:4], byteorder="big", signed=True)
-        r_value = None if r == 0x7FFE else round(r * 0.1, 1)
-        t_value = None if t == 0x7FFE else round(t * 0.1, 1)
-        return {
-            "type": "instantaneous_current",
-            "r_phase_a": r_value,
-            "t_phase_a": t_value,
-            "display": f"R:{_fmt_num(r_value, 'A')} T:{_fmt_num(t_value, 'A')}",
-        }
+    except ValueError:
+        return None
 
-    if (short_name == "instantaneousvoltage" or epc_key == "0xC8") and len(token) == 8:
-        raw = bytes.fromhex(token)
-        rs = int.from_bytes(raw[0:2], byteorder="big", signed=False)
-        st = int.from_bytes(raw[2:4], byteorder="big", signed=False)
-        rs_value = None if rs == 0xFFFE else round(rs * 0.1, 1)
-        st_value = None if st == 0xFFFE else round(st * 0.1, 1)
-        return {
-            "type": "instantaneous_voltage",
-            "r_s_v": rs_value,
-            "s_t_v": st_value,
-            "display": f"R-S:{_fmt_num(rs_value, 'V')} S-T:{_fmt_num(st_value, 'V')}",
-        }
+    result: dict[str, Any] = {"type": "object_split"}
+    display_parts: list[str] = []
+    offset = 0
+    for field in fields:
+        if not isinstance(field, dict):
+            return None
+        key = str(field.get("key") or "").strip()
+        field_type = str(field.get("type") or "").strip().lower()
+        size = field.get("size")
+        if not key or not isinstance(size, int) or size <= 0:
+            return None
+        if offset + size > len(raw):
+            return None
+        chunk = raw[offset : offset + size]
+        offset += size
 
-    if short_name == "measurementchannel1" and len(token) == 16:
-        raw = bytes.fromhex(token)
-        energy_raw = int.from_bytes(raw[0:4], byteorder="big", signed=False)
-        current_r_raw = int.from_bytes(raw[4:6], byteorder="big", signed=True)
-        current_t_raw = int.from_bytes(raw[6:8], byteorder="big", signed=True)
-        energy = None if energy_raw == 0xFFFFFFFE else _apply_kwh_unit_from_payload(energy_raw, payload)
-        current_r = None if current_r_raw == 0x7FFE else round(current_r_raw * 0.1, 1)
-        current_t = None if current_t_raw == 0x7FFE else round(current_t_raw * 0.1, 1)
-        return {
-            "type": "measurement_channel_1",
-            "electric_energy_kwh": energy,
-            "current_r_phase_a": current_r,
-            "current_t_phase_a": current_t,
-            "display": (
-                f"E:{_fmt_num(energy, 'kWh')} "
-                f"R:{_fmt_num(current_r, 'A')} "
-                f"T:{_fmt_num(current_t, 'A')}"
-            ),
-        }
-    return None
+        if field_type not in {"number", "level"}:
+            continue
+        fmt = str(field.get("format") or "").strip().lower()
+        signed = fmt.startswith("int")
+        int_unsigned = int.from_bytes(chunk, byteorder="big", signed=False)
+        int_value = int.from_bytes(chunk, byteorder="big", signed=signed)
+        no_data_codes = field.get("no_data_codes", [])
+        if isinstance(no_data_codes, list) and int_unsigned in {c for c in no_data_codes if isinstance(c, int)}:
+            value: float | None = None
+        else:
+            value = float(int_value)
+            multiple = field.get("multiple")
+            if isinstance(multiple, (int, float)):
+                value *= float(multiple)
+            coef = _coefficient_factor(payload, field.get("coefficient"))
+            if coef is not None:
+                value *= coef
+            value = round(value, 6)
+
+        result[key] = value
+        name = str(field.get("name") or key)
+        unit_raw = field.get("unit")
+        unit = _UNIT_MAP.get(unit_raw, unit_raw) if isinstance(unit_raw, str) else ""
+        display_parts.append(f"{name}:{_fmt_num(value, unit)}")
+
+    if offset != len(raw):
+        return None
+    if not display_parts:
+        return None
+    result["display"] = " ".join(display_parts)
+    return result
 
 
 def _decode_special_value(epc_key: str, raw_value: Any) -> str | None:
@@ -610,6 +620,35 @@ def _apply_kwh_unit_from_payload(value: int, payload: dict[str, Any]) -> float:
     if coef is None:
         return float(value)
     return round(float(value) * coef, 6)
+
+
+def _coefficient_factor(payload: dict[str, Any], refs: Any) -> float | None:
+    if not isinstance(refs, list) or not refs:
+        return None
+    factor = 1.0
+    used = False
+    for ref in refs:
+        if not isinstance(ref, str):
+            continue
+        epc = _normalize_epc_key(ref)
+        if not epc:
+            continue
+        token = _normalize_hex_token(payload.get(epc))
+        if not token:
+            continue
+        used = True
+        if epc == "0xC2":
+            c = _KWH_UNIT_COEFFICIENT.get(token[-2:])
+            if c is not None:
+                factor *= c
+            continue
+        try:
+            factor *= float(int(token, 16))
+        except ValueError:
+            continue
+    if not used:
+        return None
+    return factor
 
 
 def _normalize_hex_token(value: Any) -> str:

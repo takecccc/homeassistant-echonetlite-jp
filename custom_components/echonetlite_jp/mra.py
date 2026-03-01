@@ -156,11 +156,13 @@ class MRAClassResolver:
             "maximum": None,
             "base": None,
             "enum": {},
+            "object_fields": [],
         }
         if not info["name"] and info["short_name"]:
             info["name"] = info["short_name"]
         refs = self._collect_refs(prop.get("data"))
         info["refs"] = refs
+        info["object_fields"] = self._extract_object_fields(prop.get("data"))
 
         schema: dict[str, Any] | None = None
         for ref_key in refs:
@@ -192,6 +194,143 @@ class MRAClassResolver:
             info["base"] = schema.get("base")
         info["enum"] = self._extract_enum_map(schema)
         return info
+
+    def _extract_object_fields(self, data_node: Any) -> list[dict[str, Any]]:
+        schema = self._resolve_schema(data_node)
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            return []
+        properties = schema.get("properties")
+        if not isinstance(properties, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in properties:
+            if not isinstance(item, dict):
+                continue
+            short_name = str(item.get("shortName") or "").strip()
+            if not short_name:
+                continue
+            element_name = self._extract_name(item.get("elementName"))
+            element_node = item.get("element")
+            number_schema = self._pick_schema_by_type(element_node, {"number", "level"})
+            state_schema = self._pick_schema_by_type(element_node, {"state"})
+            selected = number_schema or state_schema
+            if not isinstance(selected, dict):
+                continue
+
+            value_type = str(selected.get("type") or "").strip().lower()
+            if value_type not in {"number", "level", "state"}:
+                continue
+            fmt = str(selected.get("format") or "").strip()
+            size = self._schema_size_bytes(selected)
+            if size is None:
+                continue
+            unit = selected.get("unit")
+            multiple = selected.get("multiple")
+            if multiple is None:
+                multiple = selected.get("multipleOf")
+            coefficient = selected.get("coefficient")
+            if not isinstance(coefficient, list):
+                coefficient = []
+            no_data_codes = self._extract_no_data_codes(state_schema)
+
+            out.append(
+                {
+                    "key": short_name,
+                    "name": element_name or short_name,
+                    "type": value_type,
+                    "format": fmt,
+                    "size": size,
+                    "unit": unit if isinstance(unit, str) else None,
+                    "multiple": multiple if isinstance(multiple, (int, float)) else None,
+                    "coefficient": [str(x) for x in coefficient if isinstance(x, str)],
+                    "no_data_codes": no_data_codes,
+                }
+            )
+        return out
+
+    def _resolve_schema(self, node: Any) -> dict[str, Any] | None:
+        if not isinstance(node, dict):
+            return None
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            key = self._ref_key(ref)
+            if key and key in self._definitions:
+                resolved = self._definitions[key]
+                if isinstance(resolved, dict):
+                    return resolved
+        if "oneOf" in node and isinstance(node["oneOf"], list):
+            for candidate in node["oneOf"]:
+                resolved = self._resolve_schema(candidate)
+                if isinstance(resolved, dict):
+                    return resolved
+        return node
+
+    def _pick_schema_by_type(self, node: Any, wanted: set[str]) -> dict[str, Any] | None:
+        if isinstance(node, list):
+            for item in node:
+                found = self._pick_schema_by_type(item, wanted)
+                if isinstance(found, dict):
+                    return found
+            return None
+        if not isinstance(node, dict):
+            return None
+
+        one_of = node.get("oneOf")
+        if isinstance(one_of, list):
+            for candidate in one_of:
+                found = self._pick_schema_by_type(candidate, wanted)
+                if isinstance(found, dict):
+                    return found
+
+        resolved = self._resolve_schema(node)
+        if not isinstance(resolved, dict):
+            return None
+        if str(resolved.get("type") or "").strip().lower() in wanted:
+            return resolved
+        return None
+
+    @staticmethod
+    def _schema_size_bytes(schema: dict[str, Any]) -> int | None:
+        fmt = str(schema.get("format") or "").strip().lower()
+        if fmt in {"uint8", "int8"}:
+            return 1
+        if fmt in {"uint16", "int16"}:
+            return 2
+        if fmt in {"uint32", "int32"}:
+            return 4
+        size = schema.get("size")
+        if isinstance(size, int) and size > 0:
+            return size
+        min_size = schema.get("minSize")
+        max_size = schema.get("maxSize")
+        if isinstance(min_size, int) and isinstance(max_size, int) and min_size == max_size and min_size > 0:
+            return min_size
+        return None
+
+    @staticmethod
+    def _extract_no_data_codes(schema: dict[str, Any] | None) -> list[int]:
+        if not isinstance(schema, dict):
+            return []
+        values = schema.get("enum")
+        if not isinstance(values, list):
+            return []
+        out: list[int] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            edt = item.get("edt")
+            if not isinstance(edt, str):
+                continue
+            token = edt.strip().lower()
+            if token.startswith("0x"):
+                token = token[2:]
+            if not token:
+                continue
+            try:
+                out.append(int(token, 16))
+            except ValueError:
+                continue
+        return sorted(set(out))
 
     @staticmethod
     def _parse_epc(value: Any) -> int | None:

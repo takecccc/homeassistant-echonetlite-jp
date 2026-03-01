@@ -45,7 +45,8 @@ cp -r custom_components/echonetlite_jp /config/custom_components/
 - デバイス名: `メーカー + デバイス名 + EOJ説明(EOJ)` で表示
 - センサー: 取得した EPC ごとに個別センサーを作成
 - センサー値: MRA定義に基づき、可能な範囲で単位・倍率 (`multiple`)・状態(enum)を反映
-- 複合値 EPC（例: `0xC7/0xC8/measurementChannel1`）は元EPCセンサーを作らず、分解した数値センサーのみ自動生成
+- 複合値 EPC は MRA の object 定義を基に元EPCセンサーを作らず、分解した数値センサーのみ自動生成（例: `0xC7/0xC8/計測チャネル1〜32`）
+- 分割後センサー名は MRA の日本語フィールド名を使用
 - `0x88`（異常発生状態）は状態ラベルへ補正、`0x81`（設置場所）は主要コードを名称へマッピング
 - スイッチ: `set_map` 内で ON/OFF と判定できる EPC（例: 運転状態 EPC `0x80`）を Switch として作成
 - Number: `set_map` 内で数値型(`number`)と判定できる EPC を NumberEntity として作成
