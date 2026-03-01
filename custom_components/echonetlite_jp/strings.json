@@ -16,7 +16,8 @@
           "refresh_interval": "Refresh inventory interval (sec)",
           "max_opc": "Max OPC per request",
           "mra_dir": "MRA directory (optional)",
-          "rediscover_on_error": "Rediscover on error"
+          "rediscover_on_error": "Rediscover on error",
+          "exclude_unknown_epcs": "Exclude unknown EPC entities"
         }
       }
     },

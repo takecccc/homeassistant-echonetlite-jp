@@ -16,7 +16,8 @@
           "refresh_interval": "インベントリ更新間隔(秒)",
           "max_opc": "1リクエストあたり最大OPC",
           "mra_dir": "MRAディレクトリ(任意)",
-          "rediscover_on_error": "エラー時に再探索"
+          "rediscover_on_error": "エラー時に再探索",
+          "exclude_unknown_epcs": "unknown EPC のエンティティを除外"
         }
       }
     },
