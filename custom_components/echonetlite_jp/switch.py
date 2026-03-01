@@ -47,14 +47,12 @@ async def async_setup_entry(
             eoj = str(data.get("eoj") or "").strip()
             if not eoj:
                 continue
-            payload = data.get("payload", {})
             set_map = _epc_keys_from_map(data.get("set_map", []))
-            payload_map = payload if isinstance(payload, dict) else {}
             for epc_key in set_map:
                 if not should_register_epc(coordinator.client, eoj, epc_key, filter_options):
                     continue
-                raw_value = payload_map.get(epc_key)
-                if _looks_like_on_off(epc_key, raw_value):
+                meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
+                if _is_switch_epc(epc_key, meta):
                     pairs.append((target_key, epc_key))
         return sorted(set(pairs))
 
@@ -221,11 +219,37 @@ def _epc_keys_from_map(values: Any) -> list[str]:
     return out
 
 
-def _looks_like_on_off(epc_key: str, raw_value: Any) -> bool:
+def _is_switch_epc(epc_key: str, meta: Any) -> bool:
     if epc_key in _KNOWN_ONOFF_EPCS:
         return True
-    token = _normalize_token(raw_value)
-    return token in _ON_LIKE or token in _OFF_LIKE
+    if not isinstance(meta, dict):
+        return False
+    if str(meta.get("type") or "").strip().lower() != "state":
+        return False
+    enum_map = meta.get("enum", {})
+    if not isinstance(enum_map, dict):
+        return False
+    return _is_binary_onoff_enum(enum_map)
+
+
+def _is_binary_onoff_enum(enum_map: dict[str, Any]) -> bool:
+    if len(enum_map) != 2:
+        return False
+    on_like = {"on", "true", "1"}
+    off_like = {"off", "false", "0"}
+    seen_on = False
+    seen_off = False
+    for label in enum_map.values():
+        if not isinstance(label, str):
+            return False
+        norm = label.strip().lower()
+        if norm in on_like:
+            seen_on = True
+        elif norm in off_like:
+            seen_off = True
+        else:
+            return False
+    return seen_on and seen_off
 
 
 def _to_bool(raw_value: Any) -> bool | None:

@@ -16,6 +16,24 @@ from .entity_filter import EntityFilterOptions
 from .entity_filter import should_register_epc
 
 _EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
+_INSTALL_LOCATION_LABELS = {
+    "00": "未設定",
+    "08": "リビング",
+    "10": "ダイニング",
+    "18": "キッチン",
+    "20": "浴室",
+    "28": "洗面所/脱衣所",
+    "30": "トイレ",
+    "38": "廊下",
+    "40": "部屋",
+    "48": "階段",
+    "50": "玄関",
+    "58": "納戸",
+    "60": "庭",
+    "68": "車庫",
+    "70": "ベランダ",
+    "78": "その他",
+}
 
 
 async def async_setup_entry(
@@ -40,9 +58,7 @@ async def async_setup_entry(
                 meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
                 if not isinstance(meta, dict):
                     continue
-                if str(meta.get("type") or "").strip().lower() != "state":
-                    continue
-                enum_map = meta.get("enum", {})
+                enum_map = _select_enum_map(epc_key, meta)
                 if not isinstance(enum_map, dict) or len(enum_map) == 0:
                     continue
                 if _is_binary_onoff_enum(enum_map):
@@ -114,6 +130,8 @@ class HemsEchonetEpcSelect(CoordinatorEntity[HemsEchonetCoordinator], SelectEnti
     def current_option(self) -> str | None:
         enum_map = self._enum_map()
         token = _normalize_hex_token(self._current_raw_value())
+        if self._epc_key == "0x81" and token:
+            token = token[-2:]
         if token and token in enum_map:
             label = enum_map[token]
             if isinstance(label, str) and label.strip():
@@ -152,9 +170,13 @@ class HemsEchonetEpcSelect(CoordinatorEntity[HemsEchonetCoordinator], SelectEnti
         }
 
     async def async_select_option(self, option: str) -> None:
+        enum_map = self._enum_map()
+        token = _token_by_option(enum_map, option)
+        if not token:
+            raise HomeAssistantError(f"invalid option: {option}")
         try:
-            updated = await self.coordinator.client.async_set_epc_value(
-                self._target_key, self._epc_key, option
+            updated = await self.coordinator.client.async_set_epc(
+                self._target_key, self._epc_key, token
             )
             self._value_override = updated
             self._last_error = None
@@ -185,10 +207,28 @@ class HemsEchonetEpcSelect(CoordinatorEntity[HemsEchonetCoordinator], SelectEnti
 
     def _enum_map(self) -> dict[str, Any]:
         meta = self._meta() or {}
-        enum_map = meta.get("enum", {})
-        if isinstance(enum_map, dict):
-            return enum_map
+        return _select_enum_map(self._epc_key, meta)
+
+
+def _select_enum_map(epc_key: str, meta: dict[str, Any]) -> dict[str, Any]:
+    if epc_key == "0x81":
+        return dict(_INSTALL_LOCATION_LABELS)
+    if str(meta.get("type") or "").strip().lower() != "state":
         return {}
+    enum_map = meta.get("enum", {})
+    if isinstance(enum_map, dict):
+        return enum_map
+    return {}
+
+
+def _token_by_option(enum_map: dict[str, Any], option: str) -> str | None:
+    wanted = option.strip().lower()
+    for token, label in enum_map.items():
+        if not isinstance(label, str):
+            continue
+        if label.strip().lower() == wanted:
+            return token
+    return None
 
 
 def _epc_keys_from_map(values: Any) -> list[str]:
