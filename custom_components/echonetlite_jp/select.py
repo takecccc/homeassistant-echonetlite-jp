@@ -45,6 +45,9 @@ async def async_setup_entry(
                 enum_map = meta.get("enum", {})
                 if not isinstance(enum_map, dict) or len(enum_map) == 0:
                     continue
+                if _is_binary_onoff_enum(enum_map):
+                    # ON/OFF の2値は switch プラットフォーム側で扱う。
+                    continue
                 pairs.append((target_key, epc_key))
         return sorted(set(pairs))
 
@@ -218,6 +221,26 @@ def _normalize_hex_token(value: Any) -> str:
     if not re.fullmatch(r"[0-9A-F]+", token):
         return ""
     return token
+
+
+def _is_binary_onoff_enum(enum_map: dict[str, Any]) -> bool:
+    if len(enum_map) != 2:
+        return False
+    on_like = {"on", "true", "1"}
+    off_like = {"off", "false", "0"}
+    seen_on = False
+    seen_off = False
+    for label in enum_map.values():
+        if not isinstance(label, str):
+            return False
+        norm = label.strip().lower()
+        if norm in on_like:
+            seen_on = True
+        elif norm in off_like:
+            seen_off = True
+        else:
+            return False
+    return seen_on and seen_off
 
 
 def _normalize_epc_key(value: str) -> str | None:
