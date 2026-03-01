@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import date as date_cls
 import json
 import re
 from typing import Any
 
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -200,8 +203,13 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
         value = self._current_raw_value()
         if value is None:
             return None
+        meta = self._meta() or {}
+        value_type = str(meta.get("type") or "").strip().lower()
         decoded = self._decode_value(value)
         if decoded is not None:
+            coerced = _coerce_native_value(decoded, value_type)
+            if coerced is not None:
+                return coerced
             return decoded
         if isinstance(value, bool):
             return value
@@ -220,6 +228,26 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
         if not isinstance(unit, str) or not unit.strip():
             return None
         return _UNIT_MAP.get(unit.strip(), unit.strip())
+
+    @property
+    def device_class(self) -> SensorDeviceClass | None:
+        meta = self._meta() or {}
+        value_type = str(meta.get("type") or "").strip().lower()
+        unit = self.native_unit_of_measurement
+        name = str(meta.get("name") or "")
+        return _infer_sensor_device_class(value_type, unit, name)
+
+    @property
+    def state_class(self) -> SensorStateClass | None:
+        meta = self._meta() or {}
+        value_type = str(meta.get("type") or "").strip().lower()
+        if value_type not in {"number", "level"}:
+            return None
+        unit = self.native_unit_of_measurement
+        name = str(meta.get("name") or "")
+        if _is_energy_total(unit, name):
+            return SensorStateClass.TOTAL_INCREASING
+        return SensorStateClass.MEASUREMENT
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -444,6 +472,28 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
         return unit
 
     @property
+    def device_class(self) -> SensorDeviceClass | None:
+        meta = self._meta() or {}
+        field = _composite_field_info(self._epc_key, meta, self._field_key)
+        value_type = str(field.get("type") or "").strip().lower()
+        unit = self.native_unit_of_measurement
+        name = str(field.get("name") or self._field_key)
+        return _infer_sensor_device_class(value_type, unit, name)
+
+    @property
+    def state_class(self) -> SensorStateClass | None:
+        meta = self._meta() or {}
+        field = _composite_field_info(self._epc_key, meta, self._field_key)
+        value_type = str(field.get("type") or "").strip().lower()
+        if value_type not in {"number", "level"}:
+            return None
+        unit = self.native_unit_of_measurement
+        name = str(field.get("name") or self._field_key)
+        if _is_energy_total(unit, name):
+            return SensorStateClass.TOTAL_INCREASING
+        return SensorStateClass.MEASUREMENT
+
+    @property
     def available(self) -> bool:
         return self.native_value is not None
 
@@ -497,11 +547,11 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
         return _decode_composite_values(self._epc_key, self._meta() or {}, raw_value, payload)
 
 
-def _composite_field_specs(epc_key: str, meta: dict[str, Any] | None) -> list[dict[str, str]]:
+def _composite_field_specs(epc_key: str, meta: dict[str, Any] | None) -> list[dict[str, Any]]:
     fields = (meta or {}).get("object_fields", [])
     if not isinstance(fields, list):
         return []
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for field in fields:
         if not isinstance(field, dict):
             continue
@@ -516,15 +566,15 @@ def _composite_field_specs(epc_key: str, meta: dict[str, Any] | None) -> list[di
         unit = ""
         if isinstance(unit_raw, str) and unit_raw.strip():
             unit = _UNIT_MAP.get(unit_raw.strip(), unit_raw.strip())
-        out.append({"key": key, "name": name, "unit": unit})
+        out.append({"key": key, "name": name, "unit": unit, "type": field_type})
     return out
 
 
-def _composite_field_info(epc_key: str, meta: dict[str, Any], field_key: str) -> dict[str, str]:
+def _composite_field_info(epc_key: str, meta: dict[str, Any], field_key: str) -> dict[str, Any]:
     for item in _composite_field_specs(epc_key, meta):
         if item["key"] == field_key:
             return item
-    return {"key": field_key, "name": field_key, "unit": ""}
+    return {"key": field_key, "name": field_key, "unit": "", "type": ""}
 
 
 def _decode_composite_values(
@@ -791,6 +841,50 @@ def _fmt_display(value: Any, unit: str) -> str:
     if isinstance(value, (int, float)):
         return _fmt_num(value, unit)
     return "N/A"
+
+
+def _coerce_native_value(decoded: Any, value_type: str) -> Any:
+    if value_type == "date" and isinstance(decoded, str):
+        m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", decoded)
+        if not m:
+            return decoded
+        try:
+            return date_cls(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return decoded
+    return decoded
+
+
+def _infer_sensor_device_class(value_type: str, unit: str | None, name: str) -> SensorDeviceClass | None:
+    if value_type == "date":
+        return SensorDeviceClass.DATE
+    unit_norm = (unit or "").strip().lower()
+    if unit_norm == "°c":
+        return SensorDeviceClass.TEMPERATURE
+    if unit_norm == "w":
+        return SensorDeviceClass.POWER
+    if unit_norm in {"wh", "kwh"}:
+        return SensorDeviceClass.ENERGY
+    if unit_norm == "a":
+        return SensorDeviceClass.CURRENT
+    if unit_norm == "v":
+        return SensorDeviceClass.VOLTAGE
+    if unit_norm == "hz":
+        return SensorDeviceClass.FREQUENCY
+    if unit_norm in {"s", "min", "h"}:
+        return SensorDeviceClass.DURATION
+    lowered = name.lower()
+    if "温度" in name or "temperature" in lowered:
+        return SensorDeviceClass.TEMPERATURE
+    return None
+
+
+def _is_energy_total(unit: str | None, name: str) -> bool:
+    unit_norm = (unit or "").strip().lower()
+    if unit_norm not in {"wh", "kwh"}:
+        return False
+    lowered = name.lower()
+    return ("積算" in name) or ("cumulative" in lowered)
 
 
 def _normalize_epc_key(value: str) -> str | None:
