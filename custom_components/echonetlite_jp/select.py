@@ -16,7 +16,7 @@ from .const import DOMAIN
 from .coordinator import HemsEchonetCoordinator
 
 _EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
-_EXCLUDED_EPCS = {"0x9E", "0x9F"}
+_EXCLUDED_EPCS = {"0x9D", "0x9E", "0x9F"}
 
 
 async def async_setup_entry(

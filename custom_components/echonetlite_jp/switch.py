@@ -16,7 +16,7 @@ from .const import DOMAIN
 from .coordinator import HemsEchonetCoordinator
 
 _EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
-_EXCLUDED_EPCS = {"0x9E", "0x9F"}
+_EXCLUDED_EPCS = {"0x9D", "0x9E", "0x9F"}
 _KNOWN_ONOFF_EPCS = {"0x80"}
 _ON_LIKE = {"1", "01", "30", "41", "ON", "TRUE"}
 _OFF_LIKE = {"0", "00", "31", "42", "OFF", "FALSE"}

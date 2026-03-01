@@ -45,7 +45,7 @@ cp -r custom_components/echonetlite_jp /config/custom_components/
 - スイッチ: `set_map` 内で ON/OFF と判定できる EPC（例: 運転状態 EPC `0x80`）を Switch として作成
 - Number: `set_map` 内で数値型(`number`)と判定できる EPC を NumberEntity として作成
 - Select: `set_map` 内で状態列挙型(`state/enum`)と判定できる EPC を SelectEntity として作成
-- `Get property map (0x9F)` / `Set property map (0x9E)` はエンティティとして登録しない
+- `Status change announcement property map (0x9D)` / `Get property map (0x9F)` / `Set property map (0x9E)` はエンティティとして登録しない
 - Set操作:
   - `set_epc` は EDT の16進文字列を直接指定
   - `set_epc_value` は MRA 定義を使って enum/数値(倍率付き)を EDT へ変換して設定
