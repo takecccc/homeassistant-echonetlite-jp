@@ -168,7 +168,8 @@ class MRAClassResolver:
         data_node = prop.get("data")
         number_schema = self._pick_schema_by_type(data_node, {"number", "level"})
         state_schema = self._pick_schema_by_type(data_node, {"state"})
-        schema: dict[str, Any] | None = number_schema or state_schema
+        temporal_schema = self._pick_schema_by_type(data_node, {"time", "date", "date-time"})
+        schema: dict[str, Any] | None = number_schema or state_schema or temporal_schema
         if schema is None:
             for ref_key in refs:
                 candidate = self._definitions.get(ref_key)
