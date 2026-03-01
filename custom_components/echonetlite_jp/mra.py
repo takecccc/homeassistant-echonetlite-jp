@@ -138,8 +138,8 @@ class MRAClassResolver:
 
         for epc, info in rows:
             info["is_atomic_helper"] = epc in atomic_targets
-            if epc not in out:
-                out[epc] = info
+            # Prefer later definitions in a class file (usually newer release ranges).
+            out[epc] = info
         return out
 
     def _extract_prop_info(self, prop: dict[str, Any]) -> dict[str, Any]:
