@@ -30,3 +30,7 @@ dist/
 .DS_Store
 
 /mra/
+
+# Local registry / sqlite
+*.sqlite3
+*.db

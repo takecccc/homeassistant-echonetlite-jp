@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import os
 import re
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
@@ -38,6 +40,157 @@ def normalize_json(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
+
+
+def init_registry_db(conn: Any) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS devices (
+            device_uid TEXT PRIMARY KEY,
+            manufacturer TEXT,
+            product_code TEXT,
+            serial_number TEXT,
+            first_seen TIMESTAMPTZ NOT NULL,
+            last_seen TIMESTAMPTZ NOT NULL
+        )
+        """
+        )
+        cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_addresses (
+            id BIGSERIAL PRIMARY KEY,
+            device_uid TEXT NOT NULL,
+            ip INET NOT NULL,
+            first_seen TIMESTAMPTZ NOT NULL,
+            last_seen TIMESTAMPTZ NOT NULL,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            UNIQUE(device_uid, ip),
+            FOREIGN KEY(device_uid) REFERENCES devices(device_uid)
+        )
+        """
+        )
+        cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS samples_raw (
+            id BIGSERIAL PRIMARY KEY,
+            collected_at TIMESTAMPTZ NOT NULL,
+            device_uid TEXT NOT NULL,
+            ip INET NOT NULL,
+            eoj TEXT NOT NULL,
+            epc_code SMALLINT,
+            epc_key TEXT NOT NULL,
+            value_json JSONB NOT NULL,
+            FOREIGN KEY(device_uid) REFERENCES devices(device_uid)
+        )
+        """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_raw_uid_time ON samples_raw(device_uid, collected_at DESC)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_addresses_uid_active ON device_addresses(device_uid, active)"
+        )
+    conn.commit()
+
+
+def resolve_device_uid(state: dict[str, Any], host: str) -> str:
+    node = state.get(host, {})
+    uid = node.get("uid")
+    if uid is None or uid == "":
+        # Fallback: still deterministic per host in worst case.
+        return f"host:{host}"
+    return str(uid)
+
+
+def upsert_device_registry(
+    conn: Any,
+    state: dict[str, Any],
+    host: str,
+    now_iso: str,
+) -> str:
+    node = state.get(host, {})
+    uid = resolve_device_uid(state, host)
+    manufacturer = node.get("manufacturer")
+    product_code = node.get("product_code")
+    serial_number = None
+
+    if isinstance(manufacturer, (dict, list)):
+        manufacturer = json.dumps(manufacturer, ensure_ascii=False)
+    if manufacturer is not None:
+        manufacturer = str(manufacturer)
+    if product_code is not None:
+        product_code = str(product_code)
+
+    with conn.cursor() as cur:
+        cur.execute(
+        """
+        INSERT INTO devices(device_uid, manufacturer, product_code, serial_number, first_seen, last_seen)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT(device_uid) DO UPDATE SET
+            manufacturer=COALESCE(EXCLUDED.manufacturer, devices.manufacturer),
+            product_code=COALESCE(EXCLUDED.product_code, devices.product_code),
+            serial_number=COALESCE(EXCLUDED.serial_number, devices.serial_number),
+            last_seen=EXCLUDED.last_seen
+        """,
+        (uid, manufacturer, product_code, serial_number, now_iso, now_iso),
+        )
+        cur.execute("UPDATE device_addresses SET active=FALSE WHERE device_uid=%s", (uid,))
+        cur.execute(
+        """
+        INSERT INTO device_addresses(device_uid, ip, first_seen, last_seen, active)
+        VALUES (%s, %s, %s, %s, TRUE)
+        ON CONFLICT(device_uid, ip) DO UPDATE SET
+            last_seen=EXCLUDED.last_seen,
+            active=TRUE
+        """,
+        (uid, host, now_iso, now_iso),
+        )
+    conn.commit()
+    return uid
+
+
+def parse_epc_key(key: Any) -> tuple[int | None, str]:
+    if isinstance(key, int):
+        return key, f"0x{key:02X}"
+    if isinstance(key, str):
+        s = key.strip()
+        if re.fullmatch(r"0x[0-9A-Fa-f]{2}", s):
+            return int(s, 16), s.upper()
+        return None, s
+    return None, str(key)
+
+
+def save_raw_samples(
+    conn: Any,
+    collected_at: str,
+    device_uid: str,
+    host: str,
+    eoj: str,
+    payload: dict[str, Any],
+) -> int:
+    rows = 0
+    with conn.cursor() as cur:
+        for k, v in payload.items():
+            epc_code, epc_key = parse_epc_key(k)
+            cur.execute(
+            """
+            INSERT INTO samples_raw(collected_at, device_uid, ip, eoj, epc_code, epc_key, value_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (
+                collected_at,
+                device_uid,
+                host,
+                eoj.upper(),
+                epc_code,
+                epc_key,
+                json.dumps(normalize_json(v), ensure_ascii=False),
+            ),
+            )
+            rows += 1
+    conn.commit()
+    return rows
 
 
 def filter_by_cidr(hosts: list[str], cidr: str) -> list[str]:
@@ -343,37 +496,154 @@ async def fetch_current_raw_payload(
     return payload
 
 
+async def refresh_device_profile(
+    client: Any,
+    host: str,
+    eoj_gc: int,
+    eoj_cc: int,
+    eoj_ci: int,
+    timeout_sec: float,
+) -> None:
+    await asyncio.wait_for(client.discover(host), timeout=timeout_sec)
+    await asyncio.wait_for(client.getAllPropertyMaps(host, eoj_gc, eoj_cc, eoj_ci), timeout=timeout_sec)
+
+
+async def discover_hosts_for_collect(client: Any, args: argparse.Namespace) -> list[str]:
+    from pychonet.lib.const import ENL_MULTICAST_ADDRESS
+
+    if args.host:
+        return [args.host]
+
+    discovered_hosts: set[str] = set()
+
+    async def on_unknown_host(host: str) -> None:
+        if host in {ENL_MULTICAST_ADDRESS, args.listen_host}:
+            return
+        discovered_hosts.add(host)
+
+    client._discover_callback = on_unknown_host
+    if args.verbose:
+        print(
+            "collect discovery started "
+            f"(wait={args.discovery_wait:.1f}s, target=224.0.23.0:3610)"
+        )
+    discover_task = asyncio.create_task(client.discover())
+    step = 0.5
+    elapsed = 0.0
+    while elapsed < args.discovery_wait:
+        await asyncio.sleep(step)
+        elapsed = min(args.discovery_wait, elapsed + step)
+        if args.verbose:
+            print(
+                f"collect discovery progress: {elapsed:.1f}/{args.discovery_wait:.1f}s "
+                f"responded_hosts={len(discovered_hosts)}"
+            )
+    if not discover_task.done():
+        discover_task.cancel()
+        try:
+            await discover_task
+        except asyncio.CancelledError:
+            pass
+    return sorted(discovered_hosts)
+
+
+async def discover_targets_for_collect(
+    client: Any, hosts: list[str], eoj_filter: list[str], args: argparse.Namespace
+) -> list[tuple[str, str]]:
+    targets: list[tuple[str, str]] = []
+    for host in hosts:
+        try:
+            await asyncio.wait_for(client.discover(host), timeout=args.timeout)
+        except Exception as exc:  # noqa: BLE001
+            if args.verbose:
+                print(f"collect warn: discover(host) failed host={host} ({type(exc).__name__}: {exc})")
+            continue
+        state = getattr(client, "_state", {})
+        eojs = list_eojs_for_host(state, host)
+        if eoj_filter:
+            eojs = [e for e in eojs if e in eoj_filter]
+        for eoj in eojs:
+            gc, cc, ci = parse_eoj(eoj)
+            try:
+                await asyncio.wait_for(client.getAllPropertyMaps(host, gc, cc, ci), timeout=args.timeout)
+                targets.append((host, eoj))
+            except Exception as exc:  # noqa: BLE001
+                if args.verbose:
+                    print(
+                        f"collect warn: getAllPropertyMaps failed host={host} eoj={eoj} "
+                        f"({type(exc).__name__}: {exc})"
+                    )
+    return targets
+
+
 async def collect_loop(args: argparse.Namespace) -> int:
+    import psycopg
+
     from pychonet import ECHONETAPIClient
-    from pychonet import Factory
     from pychonet.lib.udpserver import UDPServer
 
-    eoj_gc, eoj_cc, eoj_ci = parse_eoj(args.eoj)
+    dsn = args.dsn or os.getenv("DATABASE_URL")
 
     udp = UDPServer()
     loop = asyncio.get_running_loop()
     udp.run(args.listen_host, args.listen_port, loop=loop)
     client = ECHONETAPIClient(server=udp)
+    eoj_filter = parse_eoj_candidates(args.eoj)
+    hosts = await discover_hosts_for_collect(client, args)
+    if args.cidr:
+        hosts = filter_by_cidr(hosts, args.cidr)
+    if not hosts:
+        print("collect error: no hosts discovered")
+        return 1
+    targets = await discover_targets_for_collect(client, hosts, eoj_filter, args)
+    if not targets:
+        print("collect error: no collectable EOJ targets discovered")
+        return 1
+    if args.verbose:
+        print(f"collect targets: {len(targets)}")
+        for host, eoj in targets:
+            print(f"  - host={host} eoj={eoj}")
 
-    await client.discover(args.host)
-    await client.getAllPropertyMaps(args.host, eoj_gc, eoj_cc, eoj_ci)
-    device = Factory(args.host, client, eoj_gc, eoj_cc, eoj_ci)
-    state = getattr(client, "_state", {})
-    instance = get_instance_state(state, args.host, eoj_gc, eoj_cc, eoj_ci)
-    get_map_size = len(set(instance.get(0x9F, []) or []))
-    use_raw_mode = get_map_size > args.max_update_opc
-    if use_raw_mode:
-        print(
-            "collect info: raw EPC mode enabled "
-            f"(get-map size={get_map_size}, max-update-opc={args.max_update_opc})"
-        )
+    conn = None
+    uid_by_host: dict[str, str] = {}
+    if dsn:
+        conn = psycopg.connect(dsn)
+        init_registry_db(conn)
+        state = getattr(client, "_state", {})
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for host in hosts:
+            uid = upsert_device_registry(conn, state, host, now_iso)
+            uid_by_host[host] = uid
+            if args.verbose:
+                print(f"registry: device_uid={uid} host={host}")
+    else:
+        print("collect info: running without DB persistence (--dsn / DATABASE_URL not set)")
+
+    print("collect info: raw EPC mode fixed (update() is not used)")
+
+    next_refresh_at = (
+        time.monotonic() + args.refresh_interval if args.refresh_interval > 0 else None
+    )
 
     while True:
-        if use_raw_mode:
+        if next_refresh_at is not None and time.monotonic() >= next_refresh_at:
+            try:
+                hosts = await discover_hosts_for_collect(client, args)
+                if args.cidr:
+                    hosts = filter_by_cidr(hosts, args.cidr)
+                targets = await discover_targets_for_collect(client, hosts, eoj_filter, args)
+                if args.verbose:
+                    print("collect info: periodic profile refresh completed")
+            except Exception as exc:  # noqa: BLE001
+                print(f"collect warn: periodic profile refresh failed ({type(exc).__name__}: {exc})")
+            next_refresh_at = time.monotonic() + args.refresh_interval
+
+        for host, eoj in targets:
+            eoj_gc, eoj_cc, eoj_ci = parse_eoj(eoj)
             try:
                 payload = await fetch_current_raw_payload(
                     client,
-                    args.host,
+                    host,
                     eoj_gc,
                     eoj_cc,
                     eoj_ci,
@@ -382,34 +652,38 @@ async def collect_loop(args: argparse.Namespace) -> int:
                 if not payload:
                     payload = {"value": "no data (empty get-map)"}
             except Exception as raw_exc:  # noqa: BLE001
-                print(f"collect error: {type(raw_exc).__name__}: {raw_exc}")
-                if args.once:
-                    break
-                await asyncio.sleep(args.interval)
-                continue
-        else:
-            try:
-                payload = await device.update()
-                if not isinstance(payload, dict):
-                    payload = {"value": str(payload)}
-            except Exception as exc:  # noqa: BLE001
-                print(
-                    "collect info: switching to raw EPC mode "
-                    f"because update() failed ({type(exc).__name__}: {exc})"
-                )
-                use_raw_mode = True
+                print(f"collect error: host={host} eoj={eoj} {type(raw_exc).__name__}: {raw_exc}")
+                if args.rediscover_on_error:
+                    try:
+                        await refresh_device_profile(client, host, eoj_gc, eoj_cc, eoj_ci, args.timeout)
+                        print(f"collect info: rediscover triggered host={host} eoj={eoj}")
+                    except Exception as rediscover_exc:  # noqa: BLE001
+                        print(
+                            "collect warn: rediscover failed "
+                            f"host={host} eoj={eoj} ({type(rediscover_exc).__name__}: {rediscover_exc})"
+                        )
                 continue
 
-        try:
-            now = datetime.now(timezone.utc).isoformat()
-            print(f"host={args.host} eoj={args.eoj} at={now}")
-            print(json.dumps(normalize_json(payload), ensure_ascii=False, sort_keys=True))
-        except Exception as exc:  # noqa: BLE001
-            print(f"collect error: {type(exc).__name__}: {exc}")
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                print(f"host={host} eoj={eoj} at={now}")
+                print(json.dumps(normalize_json(payload), ensure_ascii=False, sort_keys=True))
+                if conn is not None:
+                    uid = uid_by_host.get(host)
+                    if uid is None:
+                        state = getattr(client, "_state", {})
+                        uid = upsert_device_registry(conn, state, host, now)
+                        uid_by_host[host] = uid
+                    rows = save_raw_samples(conn, now, uid, host, eoj, payload)
+                    print(f"saved samples_raw rows={rows}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"collect error: host={host} eoj={eoj} {type(exc).__name__}: {exc}")
 
         if args.once:
             break
         await asyncio.sleep(args.interval)
+    if conn is not None:
+        conn.close()
     return 0
 
 
@@ -561,17 +835,56 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_collect = sub.add_parser("collect", help="Fetch and display current values")
-    p_collect.add_argument("--host", required=True, help="Target device IPv4 address")
-    p_collect.add_argument("--eoj", default="028801", help="Target EOJ hex (default: 028801)")
+    p_collect.add_argument("--host", default="", help="Target device IPv4 address (optional; omit for auto-discovery)")
+    p_collect.add_argument(
+        "--eoj",
+        default="",
+        help="Target EOJ list, comma-separated (optional; omit to collect all discovered EOJs)",
+    )
+    p_collect.add_argument(
+        "--cidr",
+        default="",
+        help="Optional IPv4 CIDR filter for discovered hosts (used when --host is omitted)",
+    )
+    p_collect.add_argument(
+        "--dsn",
+        default="",
+        help="PostgreSQL DSN (fallback: DATABASE_URL). If omitted, values are only displayed.",
+    )
     p_collect.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
     p_collect.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")
     p_collect.add_argument("--interval", type=float, default=30.0, help="Polling interval seconds")
     p_collect.add_argument(
+        "--discovery-wait",
+        type=float,
+        default=2.0,
+        help="Seconds to wait for multicast discovery responses when --host is omitted",
+    )
+    p_collect.add_argument(
         "--max-update-opc",
         type=int,
         default=24,
-        help="Max OPC count per GET request in raw mode; also used as update()->raw switch threshold",
+        help="Max OPC count per GET request in raw mode",
     )
+    p_collect.add_argument(
+        "--timeout",
+        type=float,
+        default=3.0,
+        help="Timeout seconds for discover(host) / getAllPropertyMaps / rediscover",
+    )
+    p_collect.add_argument(
+        "--refresh-interval",
+        type=float,
+        default=86400.0,
+        help="Profile refresh interval seconds (default: 86400; <=0 to disable)",
+    )
+    p_collect.add_argument(
+        "--rediscover-on-error",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Trigger rediscover+getAllPropertyMaps on collect errors",
+    )
+    p_collect.add_argument("--verbose", action="store_true", help="Show collector progress logs")
     p_collect.add_argument("--once", action="store_true", help="Collect only once")
     p_collect.set_defaults(func=None)
 

@@ -5,6 +5,7 @@ description = "Fetch and display Smart Cosmo ECHONET Lite values with pychonet"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "psycopg[binary]>=3.2.0",
   "pychonet>=2.6.18",
 ]
 
