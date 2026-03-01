@@ -355,6 +355,9 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
                     return enum_map[token]
             return None
         if value_type in {"number", "level"}:
+            no_data_codes = meta.get("no_data_codes", [])
+            if _is_no_data_code(raw_value, no_data_codes):
+                return None
             number = _decode_number(raw_value, str(meta.get("format") or ""))
             if number is None:
                 return None
@@ -750,6 +753,21 @@ def _decode_number(value: Any, fmt: str) -> int | float | None:
         return None
     signed = fmt_norm.startswith("int")
     return int.from_bytes(raw, byteorder="big", signed=signed)
+
+
+def _is_no_data_code(value: Any, codes: Any) -> bool:
+    if not isinstance(codes, list) or not codes:
+        return False
+    code_set = {c for c in codes if isinstance(c, int)}
+    if not code_set:
+        return False
+    token = _normalize_hex_token(value)
+    if not token:
+        return False
+    try:
+        return int(token, 16) in code_set
+    except ValueError:
+        return False
 
 
 def _fmt_num(value: float | int | None, unit: str) -> str:

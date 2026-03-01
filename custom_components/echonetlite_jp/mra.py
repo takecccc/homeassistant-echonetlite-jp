@@ -156,6 +156,7 @@ class MRAClassResolver:
             "maximum": None,
             "base": None,
             "enum": {},
+            "no_data_codes": [],
             "object_fields": [],
         }
         if not info["name"] and info["short_name"]:
@@ -164,15 +165,19 @@ class MRAClassResolver:
         info["refs"] = refs
         info["object_fields"] = self._extract_object_fields(prop.get("data"))
 
-        schema: dict[str, Any] | None = None
-        for ref_key in refs:
-            candidate = self._definitions.get(ref_key)
-            if not isinstance(candidate, dict):
-                continue
-            c_type = candidate.get("type")
-            if c_type in {"number", "state", "level", "time", "date", "date-time", "raw"}:
-                schema = candidate
-                break
+        data_node = prop.get("data")
+        number_schema = self._pick_schema_by_type(data_node, {"number", "level"})
+        state_schema = self._pick_schema_by_type(data_node, {"state"})
+        schema: dict[str, Any] | None = number_schema or state_schema
+        if schema is None:
+            for ref_key in refs:
+                candidate = self._definitions.get(ref_key)
+                if not isinstance(candidate, dict):
+                    continue
+                c_type = candidate.get("type")
+                if c_type in {"number", "state", "level", "time", "date", "date-time", "raw"}:
+                    schema = candidate
+                    break
         if schema is None:
             return info
 
@@ -193,6 +198,7 @@ class MRAClassResolver:
         if "base" in schema and isinstance(schema.get("base"), str):
             info["base"] = schema.get("base")
         info["enum"] = self._extract_enum_map(schema)
+        info["no_data_codes"] = self._extract_no_data_codes(state_schema)
         return info
 
     def _extract_object_fields(self, data_node: Any) -> list[dict[str, Any]]:
