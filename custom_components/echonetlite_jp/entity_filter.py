@@ -15,7 +15,7 @@ from .const import DEFAULT_EXCLUDE_RANGE_EPCS
 from .const import DEFAULT_EXCLUDE_UNKNOWN_EPCS
 
 _PROPERTY_MAP_EPCS = {"0x9D", "0x9E", "0x9F"}
-_METADATA_EPCS = {"0x82", "0x83", "0x8A", "0x8B", "0x8C", "0x8D", "0x8E"}
+_METADATA_EPCS = {"0x82", "0x83", "0x86", "0x8A", "0x8B", "0x8C", "0x8D", "0x8E"}
 _RANGE_KEYWORDS = {
     "range",
     "query",

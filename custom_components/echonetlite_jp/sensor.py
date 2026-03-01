@@ -41,6 +41,32 @@ _KWH_UNIT_COEFFICIENT = {
     "0C": 1000.0,
     "0D": 10000.0,
 }
+_FAULT_STATUS_MAP = {
+    "41": "異常あり",
+    "42": "異常なし",
+    "30": "異常あり",
+    "31": "異常なし",
+    "01": "異常あり",
+    "00": "異常なし",
+}
+_INSTALL_LOCATION_MAP_1BYTE = {
+    "00": "未設定",
+    "08": "リビング",
+    "10": "ダイニング",
+    "18": "キッチン",
+    "20": "浴室",
+    "28": "洗面所/脱衣所",
+    "30": "トイレ",
+    "38": "廊下",
+    "40": "部屋",
+    "48": "階段",
+    "50": "玄関",
+    "58": "納戸",
+    "60": "庭",
+    "68": "車庫",
+    "70": "ベランダ",
+    "78": "その他",
+}
 
 
 async def async_setup_entry(
@@ -309,6 +335,9 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
     def _decode_value(self, raw_value: Any) -> Any:
         if raw_value is None:
             return None
+        special = _decode_special_value(self._epc_key, raw_value)
+        if special is not None:
+            return special
         composite = self._decode_composite(raw_value)
         if composite is not None:
             return composite.get("display")
@@ -542,6 +571,33 @@ def _decode_composite_values(
                 f"T:{_fmt_num(current_t, 'A')}"
             ),
         }
+    return None
+
+
+def _decode_special_value(epc_key: str, raw_value: Any) -> str | None:
+    token = _normalize_hex_token(raw_value)
+    if not token:
+        return None
+    key = epc_key.upper()
+
+    # 0x88: Fault status
+    if key == "0X88":
+        mapped = _FAULT_STATUS_MAP.get(token[-2:])
+        if mapped:
+            return mapped
+        return f"状態コード 0x{token[-2:]}"
+
+    # 0x81: Installation location
+    if key == "0X81":
+        if len(token) == 2:
+            mapped = _INSTALL_LOCATION_MAP_1BYTE.get(token)
+            if mapped:
+                return mapped
+            return f"設置場所コード 0x{token}"
+        if len(token) == 34 and token.startswith("01"):
+            return f"位置情報(拡張) 0x{token}"
+        return f"設置場所データ 0x{token}"
+
     return None
 
 

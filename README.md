@@ -37,7 +37,7 @@ cp -r custom_components/echonetlite_jp /config/custom_components/
 - `mra_dir` 未指定時: Integration 同梱の MRA を使用
 - `mra_dir` 指定時: 指定ディレクトリの MRA JSON を優先使用
 - `exclude_unknown_epcs` 既定 `true`: MRAで名称解決できない unknown EPC をエンティティ化しない
-- `exclude_metadata_epcs` 既定 `true`: 識別・静的情報 EPC（例: `0x82/0x83/0x8A-0x8E`）を除外
+- `exclude_metadata_epcs` 既定 `true`: 識別・静的情報 EPC（例: `0x82/0x83/0x86/0x8A-0x8E`）を除外
 - `exclude_range_epcs` 既定 `true`: 範囲指定/クエリ系 EPC を除外
 - `exclude_auxiliary_epcs` 既定 `true`: 補助 EPC（Atomic 補助・単位/係数系）を除外
 - Home Assistant 上のデバイスは `UID + EOJ` 単位で登録
@@ -46,6 +46,7 @@ cp -r custom_components/echonetlite_jp /config/custom_components/
 - センサー: 取得した EPC ごとに個別センサーを作成
 - センサー値: MRA定義に基づき、可能な範囲で単位・倍率 (`multiple`)・状態(enum)を反映
 - 複合値 EPC（例: `0xC7/0xC8/measurementChannel1`）は元EPCセンサーを作らず、分解した数値センサーのみ自動生成
+- `0x88`（異常発生状態）は状態ラベルへ補正、`0x81`（設置場所）は主要コードを名称へマッピング
 - スイッチ: `set_map` 内で ON/OFF と判定できる EPC（例: 運転状態 EPC `0x80`）を Switch として作成
 - Number: `set_map` 内で数値型(`number`)と判定できる EPC を NumberEntity として作成
 - Select: `set_map` 内で状態列挙型(`state/enum`)と判定できる EPC を SelectEntity として作成
