@@ -419,8 +419,9 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
         ]
         base = " ".join(base_parts) if base_parts else f"ECHONET {eoj}"
         field = _composite_field_info(self._epc_key, meta, self._field_key)
+        prop_name = str(meta.get("name") or self._epc_key).strip()
         field_name = str(field.get("name") or self._field_key)
-        return f"{base} {field_name}"
+        return f"{base} {prop_name} {field_name}"
 
     @property
     def native_value(self) -> float | None:
