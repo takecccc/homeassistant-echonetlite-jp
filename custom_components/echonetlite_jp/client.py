@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from pychonet import ECHONETAPIClient
 from pychonet.lib.const import ENL_MULTICAST_ADDRESS
 from pychonet.lib.const import GET
+from pychonet.lib.const import SETC
 from pychonet.lib.udpserver import UDPServer
 
 from .mra import MRAClassResolver
@@ -126,7 +128,8 @@ class HemsEchonetClient:
             gc, cc, ci = self._parse_eoj(target.eoj)
             key = target.key
             try:
-                payload = await self._fetch_raw_payload(target.host, gc, cc, ci)
+                get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
+                payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
                 out[key] = {
                     "host": target.host,
                     "eoj": target.eoj,
@@ -136,6 +139,8 @@ class HemsEchonetClient:
                     "product_code": target.product_code,
                     "eoj_desc": target.eoj_desc,
                     "payload": payload,
+                    "get_map": [self._epc_to_key(epc) for epc in get_map],
+                    "set_map": [self._epc_to_key(epc) for epc in set_map],
                     "errors": payload.get("_errors", []),
                 }
             except Exception as exc:
@@ -148,6 +153,8 @@ class HemsEchonetClient:
                     "product_code": target.product_code,
                     "eoj_desc": target.eoj_desc,
                     "payload": {},
+                    "get_map": [],
+                    "set_map": [],
                     "errors": [f"{type(exc).__name__}: {exc}"],
                 }
                 if self._rediscover_on_error:
@@ -162,6 +169,62 @@ class HemsEchonetClient:
                     except Exception:
                         pass
         return out
+
+    async def async_get_epc(self, target_key: str, epc_key: str) -> Any:
+        assert self._client is not None
+        target = self._target_by_key(target_key)
+        if target is None:
+            raise KeyError(f"target not found: {target_key}")
+        epc = self._epc_from_key(epc_key)
+        gc, cc, ci = self._parse_eoj(target.eoj)
+        get_map, _set_map = self._get_property_maps(target.host, gc, cc, ci)
+        if epc not in get_map:
+            raise ValueError(f"{self._epc_to_key(epc)} is not in get-map")
+        ok = await self._client.echonetMessage(target.host, gc, cc, ci, GET, [{"EPC": epc}])
+        if not ok:
+            raise TimeoutError(f"GET timeout: {target.host} {target.eoj} {self._epc_to_key(epc)}")
+        state = getattr(self._client, "_state", {})
+        instance = self._get_instance_state(state, target.host, gc, cc, ci)
+        return self._normalize_epc_value(instance.get(epc))
+
+    async def async_set_epc(self, target_key: str, epc_key: str, edt_hex: str) -> Any:
+        edt = self._parse_edt_hex(edt_hex)
+        return await self._async_set_epc_bytes(target_key, epc_key, edt)
+
+    async def async_set_epc_value(self, target_key: str, epc_key: str, value: Any) -> Any:
+        meta = self.resolve_epc_metadata(target_key, epc_key) or {}
+        edt = self._encode_value_to_edt(value, meta)
+        return await self._async_set_epc_bytes(target_key, epc_key, edt)
+
+    async def _async_set_epc_bytes(self, target_key: str, epc_key: str, edt: bytes) -> Any:
+        assert self._client is not None
+        target = self._target_by_key(target_key)
+        if target is None:
+            raise KeyError(f"target not found: {target_key}")
+        epc = self._epc_from_key(epc_key)
+        gc, cc, ci = self._parse_eoj(target.eoj)
+        _get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
+        if epc not in set_map:
+            raise ValueError(f"{self._epc_to_key(epc)} is not in set-map")
+        opc = [{"EPC": epc, "PDC": len(edt), "EDT": int.from_bytes(edt, "big")}]
+        ok = await self._client.echonetMessage(target.host, gc, cc, ci, SETC, opc)
+        if not ok:
+            raise TimeoutError(f"SET timeout: {target.host} {target.eoj} {self._epc_to_key(epc)}")
+        state = getattr(self._client, "_state", {})
+        instance = self._get_instance_state(state, target.host, gc, cc, ci)
+        if epc in instance:
+            return self._normalize_epc_value(instance.get(epc))
+        return edt.hex().upper()
+
+    def resolve_epc_metadata(self, target_key: str, epc_key: str) -> dict[str, Any] | None:
+        target = self._target_by_key(target_key)
+        if target is None:
+            return None
+        try:
+            epc = self._epc_from_key(epc_key)
+        except ValueError:
+            return None
+        return self._mra.resolve_property(target.eoj, epc)
 
     async def _discover_hosts(self) -> list[str]:
         assert self._client is not None
@@ -193,11 +256,10 @@ class HemsEchonetClient:
             hosts = self._filter_by_cidr(hosts, self._cidr)
         return hosts
 
-    async def _fetch_raw_payload(self, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int) -> dict[str, Any]:
+    async def _fetch_raw_payload(
+        self, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int, get_map: list[int]
+    ) -> dict[str, Any]:
         assert self._client is not None
-        state = getattr(self._client, "_state", {})
-        instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
-        get_map = sorted(set(instance.get(0x9F, []) or []))
         if not get_map:
             return {"value": "no data (empty get-map)"}
 
@@ -213,15 +275,11 @@ class HemsEchonetClient:
                 state = getattr(self._client, "_state", {})
                 instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
                 for epc in chunk:
-                    key = f"0x{epc:02X}"
-                    value = instance.get(epc)
-                    if isinstance(value, (bytes, bytearray)):
-                        payload[key] = value.hex().upper()
-                    else:
-                        payload[key] = value
+                    key = self._epc_to_key(epc)
+                    payload[key] = self._normalize_epc_value(instance.get(epc))
             except Exception:
                 for epc in chunk:
-                    key = f"0x{epc:02X}"
+                    key = self._epc_to_key(epc)
                     try:
                         ok = await self._client.echonetMessage(
                             host, eoj_gc, eoj_cc, eoj_ci, GET, [{"EPC": epc}]
@@ -231,11 +289,7 @@ class HemsEchonetClient:
                             continue
                         state = getattr(self._client, "_state", {})
                         instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
-                        value = instance.get(epc)
-                        if isinstance(value, (bytes, bytearray)):
-                            payload[key] = value.hex().upper()
-                        else:
-                            payload[key] = value
+                        payload[key] = self._normalize_epc_value(instance.get(epc))
                     except Exception as exc:
                         failures.append(f"{key}:{type(exc).__name__}")
 
@@ -243,12 +297,167 @@ class HemsEchonetClient:
             payload["_errors"] = failures
         return payload
 
+    def _get_property_maps(
+        self, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int
+    ) -> tuple[list[int], list[int]]:
+        state = getattr(self._client, "_state", {})
+        instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
+        get_map = sorted(set(instance.get(0x9F, []) or []))
+        set_map = sorted(set(instance.get(0x9E, []) or []))
+        return get_map, set_map
+
+    def _target_by_key(self, target_key: str) -> Target | None:
+        for target in self._targets:
+            if target.key == target_key:
+                return target
+        return None
+
     @staticmethod
     def _parse_eoj(eoj: str) -> tuple[int, int, int]:
         raw = eoj.strip().lower().removeprefix("0x")
         if len(raw) != 6:
             raise ValueError("EOJ must be 3-byte hex")
         return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+
+    @staticmethod
+    def _epc_from_key(epc_key: str) -> int:
+        raw = epc_key.strip().upper()
+        if not raw.startswith("0X"):
+            raise ValueError(f"invalid EPC key: {epc_key}")
+        if len(raw) != 4:
+            raise ValueError(f"invalid EPC key: {epc_key}")
+        return int(raw, 16)
+
+    @staticmethod
+    def _epc_to_key(epc: int) -> str:
+        return f"0x{int(epc):02X}"
+
+    @staticmethod
+    def _normalize_epc_value(value: Any) -> Any:
+        if isinstance(value, (bytes, bytearray)):
+            return value.hex().upper()
+        return value
+
+    @staticmethod
+    def _parse_edt_hex(raw: str) -> bytes:
+        value = raw.strip().replace(" ", "").replace("0x", "").replace("0X", "")
+        if len(value) == 0:
+            raise ValueError("EDT must not be empty")
+        if len(value) % 2 != 0:
+            raise ValueError("EDT hex length must be even")
+        try:
+            return bytes.fromhex(value)
+        except ValueError as exc:
+            raise ValueError(f"invalid EDT hex: {raw}") from exc
+
+    @classmethod
+    def _encode_value_to_edt(cls, value: Any, meta: dict[str, Any]) -> bytes:
+        value_type = str(meta.get("type") or "").strip().lower()
+        if value_type == "state":
+            return cls._encode_state(value, meta)
+        if value_type in {"number", "level"}:
+            return cls._encode_number(value, meta)
+        if isinstance(value, str):
+            return cls._parse_edt_hex(value)
+        raise ValueError("value type is not supported for this EPC; pass EDT hex string")
+
+    @classmethod
+    def _encode_state(cls, value: Any, meta: dict[str, Any]) -> bytes:
+        enum_map = meta.get("enum", {})
+        if not isinstance(enum_map, dict):
+            if isinstance(value, str):
+                return cls._parse_edt_hex(value)
+            raise ValueError("state EPC has no enum definition; pass EDT hex string")
+
+        if isinstance(value, bool):
+            token = cls._pick_token_by_bool(enum_map, value)
+            if token:
+                return bytes.fromhex(token)
+
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("value must not be empty")
+            if cls._is_hex_token(text):
+                return cls._parse_edt_hex(text)
+            norm = text.lower()
+            for token, label in enum_map.items():
+                if isinstance(label, str) and label.strip().lower() == norm:
+                    return bytes.fromhex(token)
+            if norm in {"on", "true", "1"}:
+                token = cls._pick_token_by_bool(enum_map, True)
+                if token:
+                    return bytes.fromhex(token)
+            if norm in {"off", "false", "0"}:
+                token = cls._pick_token_by_bool(enum_map, False)
+                if token:
+                    return bytes.fromhex(token)
+
+        raise ValueError("cannot map value to state enum; use EDT hex (e.g. 30/31)")
+
+    @classmethod
+    def _encode_number(cls, value: Any, meta: dict[str, Any]) -> bytes:
+        fmt = str(meta.get("format") or "").strip().lower()
+        if fmt not in {"uint8", "int8", "uint16", "int16", "uint32", "int32"}:
+            raise ValueError("unsupported numeric format for SET")
+        if isinstance(value, str):
+            text = value.strip()
+            if cls._is_hex_token(text):
+                return cls._parse_edt_hex(text)
+            try:
+                numeric = float(text)
+            except ValueError as exc:
+                raise ValueError(f"invalid numeric value: {value}") from exc
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+        else:
+            raise ValueError("numeric value is required for this EPC")
+
+        multiple = meta.get("multiple")
+        if isinstance(multiple, (int, float)) and multiple not in {0, 0.0}:
+            numeric = numeric / float(multiple)
+
+        if not math.isfinite(numeric):
+            raise ValueError("numeric value must be finite")
+        ivalue = int(round(numeric))
+        if abs(numeric - ivalue) > 1e-6:
+            raise ValueError("value cannot be represented exactly for this EPC")
+
+        size_map = {"uint8": 1, "int8": 1, "uint16": 2, "int16": 2, "uint32": 4, "int32": 4}
+        size = size_map[fmt]
+        signed = fmt.startswith("int")
+        lower = -(1 << (8 * size - 1)) if signed else 0
+        upper = (1 << (8 * size - 1)) - 1 if signed else (1 << (8 * size)) - 1
+        if ivalue < lower or ivalue > upper:
+            raise ValueError(f"value out of range for {fmt}: {ivalue}")
+        return int(ivalue).to_bytes(size, byteorder="big", signed=signed)
+
+    @staticmethod
+    def _pick_token_by_bool(enum_map: dict[str, Any], on: bool) -> str | None:
+        wants = {"on", "true", "1"} if on else {"off", "false", "0"}
+        for token, label in enum_map.items():
+            if not isinstance(label, str):
+                continue
+            norm = label.strip().lower()
+            if norm in wants:
+                return token
+        # Common ECHONET ON/OFF representations.
+        for token in ("30", "31", "41", "42", "01", "00"):
+            if token in enum_map:
+                if on and token in {"30", "41", "01"}:
+                    return token
+                if not on and token in {"31", "42", "00"}:
+                    return token
+        return None
+
+    @staticmethod
+    def _is_hex_token(value: str) -> bool:
+        token = value.strip()
+        if token.startswith(("0x", "0X")):
+            token = token[2:]
+        if len(token) == 0 or len(token) % 2 != 0:
+            return False
+        return all(ch in "0123456789abcdefABCDEF" for ch in token)
 
     @classmethod
     def _parse_eoj_candidates(cls, raw: str) -> list[str]:

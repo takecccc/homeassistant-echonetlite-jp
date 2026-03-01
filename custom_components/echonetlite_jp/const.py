@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 DOMAIN = "echonetlite_jp"
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "switch", "number", "select"]
 
 CONF_EOJ = "eoj"
 CONF_CIDR = "cidr"
