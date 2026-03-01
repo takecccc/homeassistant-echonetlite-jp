@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ECHONET Lite JP",
+        "description": "ECHONET Lite 収集設定を入力してください。",
+        "data": {
+          "host": "ホスト (任意)",
+          "eoj": "EOJ フィルタ (カンマ区切り, 任意)",
+          "cidr": "CIDR フィルタ (任意)",
+          "scan_interval": "取得間隔(秒)",
+          "listen_host": "受信ホスト",
+          "listen_port": "受信ポート",
+          "discovery_wait": "探索待ち時間(秒)",
+          "timeout": "タイムアウト(秒)",
+          "refresh_interval": "インベントリ更新間隔(秒)",
+          "max_opc": "1リクエストあたり最大OPC",
+          "mra_dir": "MRAディレクトリ(任意)",
+          "rediscover_on_error": "エラー時に再探索"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "ホストのIPアドレスが不正です。",
+      "invalid_cidr": "CIDR が不正です。"
+    }
+  }
+}

@@ -4,8 +4,8 @@ import argparse
 import asyncio
 import ipaddress
 import json
-import os
 import re
+import sqlite3
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -43,7 +43,8 @@ def normalize_json(value: Any) -> Any:
 
 
 def init_registry_db(conn: Any) -> None:
-    with conn.cursor() as cur:
+    cur = conn.cursor()
+    try:
         cur.execute(
         """
         CREATE TABLE IF NOT EXISTS devices (
@@ -51,20 +52,20 @@ def init_registry_db(conn: Any) -> None:
             manufacturer TEXT,
             product_code TEXT,
             serial_number TEXT,
-            first_seen TIMESTAMPTZ NOT NULL,
-            last_seen TIMESTAMPTZ NOT NULL
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL
         )
         """
         )
         cur.execute(
         """
         CREATE TABLE IF NOT EXISTS device_addresses (
-            id BIGSERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             device_uid TEXT NOT NULL,
-            ip INET NOT NULL,
-            first_seen TIMESTAMPTZ NOT NULL,
-            last_seen TIMESTAMPTZ NOT NULL,
-            active BOOLEAN NOT NULL DEFAULT TRUE,
+            ip TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
             UNIQUE(device_uid, ip),
             FOREIGN KEY(device_uid) REFERENCES devices(device_uid)
         )
@@ -73,14 +74,14 @@ def init_registry_db(conn: Any) -> None:
         cur.execute(
         """
         CREATE TABLE IF NOT EXISTS samples_raw (
-            id BIGSERIAL PRIMARY KEY,
-            collected_at TIMESTAMPTZ NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            collected_at TEXT NOT NULL,
             device_uid TEXT NOT NULL,
-            ip INET NOT NULL,
+            ip TEXT NOT NULL,
             eoj TEXT NOT NULL,
             epc_code SMALLINT,
             epc_key TEXT NOT NULL,
-            value_json JSONB NOT NULL,
+            value_json TEXT NOT NULL,
             FOREIGN KEY(device_uid) REFERENCES devices(device_uid)
         )
         """
@@ -91,6 +92,8 @@ def init_registry_db(conn: Any) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_device_addresses_uid_active ON device_addresses(device_uid, active)"
         )
+    finally:
+        cur.close()
     conn.commit()
 
 
@@ -122,11 +125,12 @@ def upsert_device_registry(
     if product_code is not None:
         product_code = str(product_code)
 
-    with conn.cursor() as cur:
+    cur = conn.cursor()
+    try:
         cur.execute(
         """
         INSERT INTO devices(device_uid, manufacturer, product_code, serial_number, first_seen, last_seen)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(device_uid) DO UPDATE SET
             manufacturer=COALESCE(EXCLUDED.manufacturer, devices.manufacturer),
             product_code=COALESCE(EXCLUDED.product_code, devices.product_code),
@@ -135,17 +139,19 @@ def upsert_device_registry(
         """,
         (uid, manufacturer, product_code, serial_number, now_iso, now_iso),
         )
-        cur.execute("UPDATE device_addresses SET active=FALSE WHERE device_uid=%s", (uid,))
+        cur.execute("UPDATE device_addresses SET active=0 WHERE device_uid=?", (uid,))
         cur.execute(
         """
         INSERT INTO device_addresses(device_uid, ip, first_seen, last_seen, active)
-        VALUES (%s, %s, %s, %s, TRUE)
+        VALUES (?, ?, ?, ?, 1)
         ON CONFLICT(device_uid, ip) DO UPDATE SET
             last_seen=EXCLUDED.last_seen,
-            active=TRUE
+            active=1
         """,
         (uid, host, now_iso, now_iso),
         )
+    finally:
+        cur.close()
     conn.commit()
     return uid
 
@@ -170,13 +176,14 @@ def save_raw_samples(
     payload: dict[str, Any],
 ) -> int:
     rows = 0
-    with conn.cursor() as cur:
+    cur = conn.cursor()
+    try:
         for k, v in payload.items():
             epc_code, epc_key = parse_epc_key(k)
             cur.execute(
             """
             INSERT INTO samples_raw(collected_at, device_uid, ip, eoj, epc_code, epc_key, value_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 collected_at,
@@ -189,6 +196,8 @@ def save_raw_samples(
             ),
             )
             rows += 1
+    finally:
+        cur.close()
     conn.commit()
     return rows
 
@@ -215,12 +224,16 @@ def list_eojs_for_host(state: dict[str, Any], host: str) -> list[str]:
     return eojs
 
 
-def describe_eoj(eoj: str) -> str:
+def describe_eoj(eoj: str, mra: "MRAResolver | None" = None) -> str:
     from pychonet.lib.eojx import EOJX_CLASS
     from pychonet.lib.eojx import EOJX_GROUP
 
     gc, cc, _ci = parse_eoj(eoj)
     group_name = EOJX_GROUP.get(gc, f"Unknown group 0x{gc:02X}")
+    if mra is not None:
+        class_name = mra.resolve_class_name(eoj)
+        if class_name:
+            return f"{group_name} / {class_name}"
     class_name = EOJX_CLASS.get(gc, {}).get(cc, f"Unknown class 0x{cc:02X}")
     return f"{group_name} / {class_name}"
 
@@ -229,6 +242,7 @@ class MRAResolver:
     def __init__(self, root_dir: str = "") -> None:
         self._loaded = False
         self._class_epc_info: dict[str, dict[int, dict[str, str]]] = {}
+        self._class_names: dict[str, str] = {}
         if root_dir.strip():
             self._load(Path(root_dir))
 
@@ -250,6 +264,10 @@ class MRAResolver:
             return self._class_epc_info["0000"][epc]
         return None
 
+    def resolve_class_name(self, eoj: str) -> str | None:
+        gc, cc, _ci = parse_eoj(eoj)
+        return self._class_names.get(f"{gc:02X}{cc:02X}")
+
     def _load(self, root: Path) -> None:
         if not root.exists() or not root.is_dir():
             return
@@ -261,6 +279,9 @@ class MRAResolver:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            class_name = self._extract_class_name(data)
+            if class_name and class_code not in self._class_names:
+                self._class_names[class_code] = class_name
             epc_map = self._extract_epc_map(data)
             if not epc_map:
                 continue
@@ -319,6 +340,20 @@ class MRAResolver:
 
         walk(data)
         return out
+
+    @staticmethod
+    def _extract_class_name(data: Any) -> str:
+        if not isinstance(data, dict):
+            return ""
+        class_name = data.get("className")
+        if isinstance(class_name, str) and class_name.strip():
+            return class_name.strip()
+        if isinstance(class_name, dict):
+            for key in ("ja", "JA", "en", "EN"):
+                value = class_name.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return ""
 
     @staticmethod
     def _parse_epc(value: Any) -> int | None:
@@ -577,12 +612,8 @@ async def discover_targets_for_collect(
 
 
 async def collect_loop(args: argparse.Namespace) -> int:
-    import psycopg
-
     from pychonet import ECHONETAPIClient
     from pychonet.lib.udpserver import UDPServer
-
-    dsn = args.dsn or os.getenv("DATABASE_URL")
 
     udp = UDPServer()
     loop = asyncio.get_running_loop()
@@ -604,10 +635,10 @@ async def collect_loop(args: argparse.Namespace) -> int:
         for host, eoj in targets:
             print(f"  - host={host} eoj={eoj}")
 
-    conn = None
+    conn: sqlite3.Connection | None = None
     uid_by_host: dict[str, str] = {}
-    if dsn:
-        conn = psycopg.connect(dsn)
+    if args.db_path:
+        conn = sqlite3.connect(args.db_path)
         init_registry_db(conn)
         state = getattr(client, "_state", {})
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -617,7 +648,7 @@ async def collect_loop(args: argparse.Namespace) -> int:
             if args.verbose:
                 print(f"registry: device_uid={uid} host={host}")
     else:
-        print("collect info: running without DB persistence (--dsn / DATABASE_URL not set)")
+        print("collect info: running without DB persistence (--db-path not set)")
 
     print("collect info: raw EPC mode fixed (update() is not used)")
 
@@ -777,7 +808,7 @@ async def scan_hosts_loop(args: argparse.Namespace) -> int:
             print("  - (no EOJ instances)")
             continue
         for eoj in eojs:
-            print(f"  - eoj={eoj} desc={describe_eoj(eoj)}")
+            print(f"  - eoj={eoj} desc={describe_eoj(eoj, mra)}")
             try:
                 gc, cc, ci = parse_eoj(eoj)
                 await asyncio.wait_for(
@@ -829,8 +860,10 @@ async def scan_hosts_loop(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    default_mra_dir = str((Path(__file__).resolve().parent.parent / "mra"))
+
     parser = argparse.ArgumentParser(
-        description="Collect and display current ECHONET Lite values with pychonet"
+        description="Collect and display current ECHONET Lite values"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -847,9 +880,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional IPv4 CIDR filter for discovered hosts (used when --host is omitted)",
     )
     p_collect.add_argument(
-        "--dsn",
-        default="",
-        help="PostgreSQL DSN (fallback: DATABASE_URL). If omitted, values are only displayed.",
+        "--db-path",
+        default="hems_registry.sqlite3",
+        help="SQLite DB path (default: hems_registry.sqlite3). Set empty to disable persistence.",
     )
     p_collect.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
     p_collect.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")
@@ -904,8 +937,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_scan.add_argument(
         "--mra-dir",
-        default="",
-        help="Optional path to extracted MRA JSON directory for EPC name resolution",
+        default=default_mra_dir,
+        help=f"Path to extracted MRA JSON directory for EPC name resolution (default: {default_mra_dir})",
     )
     p_scan.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
     p_scan.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")

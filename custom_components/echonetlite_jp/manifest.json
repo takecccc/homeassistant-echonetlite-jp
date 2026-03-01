@@ -1,0 +1,12 @@
+{
+  "domain": "echonetlite_jp",
+  "name": "ECHONET Lite JP",
+  "version": "0.1.0",
+  "documentation": "https://github.com/takecccc/homeassistant-echonetlite-jp",
+  "issue_tracker": "https://github.com/takecccc/homeassistant-echonetlite-jp/issues",
+  "codeowners": ["@takecccc"],
+  "config_flow": true,
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": ["pychonet==2.6.18"]
+}

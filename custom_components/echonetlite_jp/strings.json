@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ECHONET Lite JP",
+        "description": "Configure ECHONET Lite collection settings.",
+        "data": {
+          "host": "Host (optional)",
+          "eoj": "EOJ filter (comma separated, optional)",
+          "cidr": "CIDR filter (optional)",
+          "scan_interval": "Scan interval (sec)",
+          "listen_host": "Listen host",
+          "listen_port": "Listen port",
+          "discovery_wait": "Discovery wait (sec)",
+          "timeout": "Timeout (sec)",
+          "refresh_interval": "Refresh inventory interval (sec)",
+          "max_opc": "Max OPC per request",
+          "mra_dir": "MRA directory (optional)",
+          "rediscover_on_error": "Rediscover on error"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Host is not a valid IP address.",
+      "invalid_cidr": "CIDR is invalid."
+    }
+  }
+}
