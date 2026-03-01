@@ -345,6 +345,8 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
         if not isinstance(meta, dict):
             return None
         value_type = str(meta.get("type") or "").strip().lower()
+        if value_type in {"time", "date", "date-time"}:
+            return _decode_temporal_value(raw_value, value_type)
         if value_type == "state":
             enum_map = meta.get("enum", {})
             if isinstance(enum_map, dict):
@@ -649,6 +651,62 @@ def _coefficient_factor(payload: dict[str, Any], refs: Any) -> float | None:
     if not used:
         return None
     return factor
+
+
+def _decode_temporal_value(raw_value: Any, value_type: str) -> str | None:
+    # Pass-through for already formatted values.
+    if isinstance(raw_value, str):
+        s = raw_value.strip()
+        # Non-hex text is assumed to already be human readable.
+        if s and not re.fullmatch(r"(0x)?[0-9A-Fa-f]+", s):
+            if value_type == "date" and re.fullmatch(r"\d{4}[:-]\d{2}[:-]\d{2}", s):
+                return s.replace(":", "-")
+            return s
+
+    token = _normalize_hex_token(raw_value)
+    if not token:
+        return None
+    try:
+        raw = bytes.fromhex(token)
+    except ValueError:
+        return None
+
+    if value_type == "time":
+        if len(raw) != 2:
+            return None
+        hh = raw[0]
+        mm = raw[1]
+        if mm > 59:
+            return None
+        if hh > 23 and hh != 255:
+            return None
+        return f"{hh:02d}:{mm:02d}"
+
+    if value_type == "date":
+        if len(raw) != 4:
+            return None
+        yyyy = int.from_bytes(raw[0:2], byteorder="big", signed=False)
+        mm = raw[2]
+        dd = raw[3]
+        if mm < 1 or mm > 12 or dd < 1 or dd > 31:
+            return None
+        return f"{yyyy:04d}-{mm:02d}-{dd:02d}"
+
+    if value_type == "date-time":
+        if len(raw) != 6:
+            return None
+        yyyy = int.from_bytes(raw[0:2], byteorder="big", signed=False)
+        mm = raw[2]
+        dd = raw[3]
+        hh = raw[4]
+        minute = raw[5]
+        if mm < 1 or mm > 12 or dd < 1 or dd > 31:
+            return None
+        if hh > 23 or minute > 59:
+            return None
+        return f"{yyyy:04d}-{mm:02d}-{dd:02d} {hh:02d}:{minute:02d}"
+
+    return None
 
 
 def _normalize_hex_token(value: Any) -> str:

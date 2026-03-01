@@ -170,7 +170,7 @@ class MRAClassResolver:
             if not isinstance(candidate, dict):
                 continue
             c_type = candidate.get("type")
-            if c_type in {"number", "state", "level", "time", "date-time", "raw"}:
+            if c_type in {"number", "state", "level", "time", "date", "date-time", "raw"}:
                 schema = candidate
                 break
         if schema is None:
