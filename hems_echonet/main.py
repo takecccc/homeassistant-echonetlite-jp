@@ -4,6 +4,8 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import re
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
@@ -70,20 +72,174 @@ def describe_eoj(eoj: str) -> str:
     return f"{group_name} / {class_name}"
 
 
-def describe_epc(eoj: str, epc: int) -> str:
+class MRAResolver:
+    def __init__(self, root_dir: str = "") -> None:
+        self._loaded = False
+        self._class_epc_info: dict[str, dict[int, dict[str, str]]] = {}
+        if root_dir.strip():
+            self._load(Path(root_dir))
+
+    @property
+    def loaded(self) -> bool:
+        return self._loaded
+
+    @property
+    def class_count(self) -> int:
+        return len(self._class_epc_info)
+
+    def resolve(self, eoj: str, epc: int) -> dict[str, str] | None:
+        gc, cc, _ci = parse_eoj(eoj)
+        class_code = f"{gc:02X}{cc:02X}"
+        if class_code in self._class_epc_info and epc in self._class_epc_info[class_code]:
+            return self._class_epc_info[class_code][epc]
+        # Fallback to super class definition when available.
+        if "0000" in self._class_epc_info and epc in self._class_epc_info["0000"]:
+            return self._class_epc_info["0000"][epc]
+        return None
+
+    def _load(self, root: Path) -> None:
+        if not root.exists() or not root.is_dir():
+            return
+        for path in root.rglob("*.json"):
+            class_code = self._class_code_from_path(path)
+            if class_code is None:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            epc_map = self._extract_epc_map(data)
+            if not epc_map:
+                continue
+            current = self._class_epc_info.setdefault(class_code, {})
+            for epc, info in epc_map.items():
+                if epc not in current:
+                    current[epc] = info
+        self._loaded = bool(self._class_epc_info)
+
+    @staticmethod
+    def _class_code_from_path(path: Path) -> str | None:
+        matches = re.findall(r"0x([0-9A-Fa-f]{4})", str(path))
+        if matches:
+            return matches[-1].upper()
+        stem_match = re.fullmatch(r"([0-9A-Fa-f]{4})", path.stem)
+        if stem_match:
+            return stem_match.group(1).upper()
+        return None
+
+    @classmethod
+    def _extract_epc_map(cls, data: Any) -> dict[int, dict[str, str]]:
+        out: dict[int, dict[str, str]] = {}
+        if not isinstance(data, dict):
+            return out
+
+        # Common MRA layout: "elProperties": [{ "epc": "0x80", "propertyName": {...} }, ...]
+        el_props = data.get("elProperties")
+        if isinstance(el_props, list):
+            for prop in el_props:
+                if not isinstance(prop, dict):
+                    continue
+                epc = cls._parse_epc(prop.get("epc"))
+                if epc is None:
+                    continue
+                name = cls._extract_name(prop)
+                description = cls._extract_description(prop)
+                if name:
+                    out[epc] = {"name": name, "description": description}
+
+        # Generic fallback: recursively search for dicts containing epc + name-like fields.
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                epc = cls._parse_epc(
+                    node.get("epc") or node.get("propertyCode") or node.get("code")
+                )
+                if epc is not None:
+                    name = cls._extract_name(node)
+                    description = cls._extract_description(node)
+                    if name and epc not in out:
+                        out[epc] = {"name": name, "description": description}
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(data)
+        return out
+
+    @staticmethod
+    def _parse_epc(value: Any) -> int | None:
+        if isinstance(value, int):
+            return value if 0 <= value <= 0xFF else None
+        if isinstance(value, str):
+            s = value.strip().upper()
+            if s.startswith("0X"):
+                s = s[2:]
+            if re.fullmatch(r"[0-9A-F]{2}", s):
+                return int(s, 16)
+        return None
+
+    @staticmethod
+    def _extract_name(node: dict[str, Any]) -> str | None:
+        candidates = [
+            node.get("propertyName"),
+            node.get("name"),
+            node.get("shortName"),
+            node.get("property"),
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+            if isinstance(candidate, dict):
+                for key in ("ja", "JA", "en", "EN"):
+                    val = candidate.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+        return None
+
+    @staticmethod
+    def _extract_description(node: dict[str, Any]) -> str:
+        candidate = node.get("descriptions") or node.get("description")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        if isinstance(candidate, dict):
+            for key in ("ja", "JA", "en", "EN"):
+                val = candidate.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        return ""
+
+
+def resolve_epc_info(eoj: str, epc: int, mra: MRAResolver | None = None) -> dict[str, str]:
     from pychonet.lib.epc import EPC_CODE
+
+    if mra is not None:
+        mra_info = mra.resolve(eoj, epc)
+        if mra_info is not None:
+            return {
+                "name": mra_info.get("name", ""),
+                "description": mra_info.get("description", ""),
+                "source": "mra",
+            }
 
     gc, cc, _ci = parse_eoj(eoj)
     name = EPC_CODE.get(gc, {}).get(cc, {}).get(epc)
     if name is None:
-        return f"0x{epc:02X}(unknown)"
-    return f"0x{epc:02X}({name})"
+        return {"name": "unknown", "description": "", "source": "none"}
+    return {"name": name, "description": "", "source": "pychonet"}
 
 
-def format_epc_lines(eoj: str, epcs: list[int]) -> list[str]:
+def format_epc_lines(eoj: str, epcs: list[int], mra: MRAResolver | None = None) -> list[str]:
     if not epcs:
         return ["      - (none)"]
-    return [f"      - {describe_epc(eoj, epc)}" for epc in epcs]
+    lines: list[str] = []
+    for epc in epcs:
+        info = resolve_epc_info(eoj, epc, mra)
+        base = f"      - 0x{epc:02X}({info['name']})"
+        if info["description"]:
+            base += f" : {info['description']}"
+        lines.append(base)
+    return lines
 
 
 def get_instance_maps(state: dict[str, Any], host: str, eoj: str) -> tuple[list[int], list[int], list[int]]:
@@ -108,7 +264,12 @@ def get_instance_state(
 
 
 async def fetch_current_raw_payload(
-    client: Any, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int
+    client: Any,
+    host: str,
+    eoj_gc: int,
+    eoj_cc: int,
+    eoj_ci: int,
+    max_opc_per_request: int,
 ) -> dict[str, Any]:
     from pychonet.lib.const import GET
 
@@ -120,8 +281,10 @@ async def fetch_current_raw_payload(
 
     payload: dict[str, Any] = {}
     failures: list[str] = []
-    for epc in get_map:
-        key = f"0x{epc:02X}"
+    batch_size = max(1, max_opc_per_request)
+    for start in range(0, len(get_map), batch_size):
+        chunk = get_map[start : start + batch_size]
+        opc = [{"EPC": epc} for epc in chunk]
         try:
             ok = await client.echonetMessage(
                 host,
@@ -129,20 +292,51 @@ async def fetch_current_raw_payload(
                 eoj_cc,
                 eoj_ci,
                 GET,
-                [{"EPC": epc}],
+                opc,
             )
             if not ok:
-                failures.append(f"{key}:timeout")
-                continue
+                raise TimeoutError("chunk timeout")
             state = getattr(client, "_state", {})
             instance = get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
-            value = instance.get(epc)
-            if isinstance(value, (bytes, bytearray)):
-                payload[key] = value.hex().upper()
-            else:
-                payload[key] = value
-        except Exception as exc:  # noqa: BLE001
-            failures.append(f"{key}:{type(exc).__name__}")
+            for epc in chunk:
+                key = f"0x{epc:02X}"
+                value = instance.get(epc)
+                if isinstance(value, (bytes, bytearray)):
+                    payload[key] = value.hex().upper()
+                else:
+                    payload[key] = value
+        except Exception:
+            # Fallback to single EPC requests for this failed chunk.
+            for epc in chunk:
+                key = f"0x{epc:02X}"
+                try:
+                    ok = await client.echonetMessage(
+                        host,
+                        eoj_gc,
+                        eoj_cc,
+                        eoj_ci,
+                        GET,
+                        [{"EPC": epc}],
+                    )
+                    if not ok:
+                        failures.append(f"{key}:timeout")
+                        continue
+                    state = getattr(client, "_state", {})
+                    instance = get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
+                    value = instance.get(epc)
+                    if isinstance(value, (bytes, bytearray)):
+                        payload[key] = value.hex().upper()
+                    else:
+                        payload[key] = value
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"{key}:{type(exc).__name__}")
+                continue
+
+    for epc in get_map:
+        key = f"0x{epc:02X}"
+        if key in payload:
+            continue
+        failures.append(f"{key}:no-data")
 
     if failures:
         payload["_errors"] = failures
@@ -164,16 +358,27 @@ async def collect_loop(args: argparse.Namespace) -> int:
     await client.discover(args.host)
     await client.getAllPropertyMaps(args.host, eoj_gc, eoj_cc, eoj_ci)
     device = Factory(args.host, client, eoj_gc, eoj_cc, eoj_ci)
+    state = getattr(client, "_state", {})
+    instance = get_instance_state(state, args.host, eoj_gc, eoj_cc, eoj_ci)
+    get_map_size = len(set(instance.get(0x9F, []) or []))
+    use_raw_mode = get_map_size > args.max_update_opc
+    if use_raw_mode:
+        print(
+            "collect info: raw EPC mode enabled "
+            f"(get-map size={get_map_size}, max-update-opc={args.max_update_opc})"
+        )
 
     while True:
-        try:
-            payload = await device.update()
-            if not isinstance(payload, dict):
-                payload = {"value": str(payload)}
-        except Exception as exc:  # noqa: BLE001
-            print(f"collect warn: update() failed ({type(exc).__name__}: {exc}), fallback to raw EPC")
+        if use_raw_mode:
             try:
-                payload = await fetch_current_raw_payload(client, args.host, eoj_gc, eoj_cc, eoj_ci)
+                payload = await fetch_current_raw_payload(
+                    client,
+                    args.host,
+                    eoj_gc,
+                    eoj_cc,
+                    eoj_ci,
+                    args.max_update_opc,
+                )
                 if not payload:
                     payload = {"value": "no data (empty get-map)"}
             except Exception as raw_exc:  # noqa: BLE001
@@ -181,6 +386,18 @@ async def collect_loop(args: argparse.Namespace) -> int:
                 if args.once:
                     break
                 await asyncio.sleep(args.interval)
+                continue
+        else:
+            try:
+                payload = await device.update()
+                if not isinstance(payload, dict):
+                    payload = {"value": str(payload)}
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    "collect info: switching to raw EPC mode "
+                    f"because update() failed ({type(exc).__name__}: {exc})"
+                )
+                use_raw_mode = True
                 continue
 
         try:
@@ -202,6 +419,7 @@ async def scan_hosts_loop(args: argparse.Namespace) -> int:
     from pychonet.lib.udpserver import UDPServer
 
     eoj_candidates = parse_eoj_candidates(args.eoj)
+    mra = MRAResolver(args.mra_dir)
     udp = UDPServer()
     loop = asyncio.get_running_loop()
     udp.run(args.listen_host, args.listen_port, loop=loop)
@@ -214,6 +432,12 @@ async def scan_hosts_loop(args: argparse.Namespace) -> int:
         discovered_hosts.add(host)
 
     client._discover_callback = on_unknown_host
+    if args.mra_dir:
+        mra_path = str(Path(args.mra_dir).resolve())
+        if mra.loaded:
+            print(f"mra loaded: classes={mra.class_count} dir={mra_path}")
+        else:
+            print(f"mra not loaded from dir={mra_path}")
 
     # Multicast discovery to 224.0.23.0, then inspect discovered hosts.
     if args.verbose:
@@ -297,13 +521,13 @@ async def scan_hosts_loop(args: argparse.Namespace) -> int:
             set_map = sorted(set(set_map))
             get_map = sorted(set(get_map))
             print("    inf-map(0x9D):")
-            for line in format_epc_lines(eoj, stat_map):
+            for line in format_epc_lines(eoj, stat_map, mra):
                 print(line)
             print("    set-map(0x9E):")
-            for line in format_epc_lines(eoj, set_map):
+            for line in format_epc_lines(eoj, set_map, mra):
                 print(line)
             print("    get-map(0x9F):")
-            for line in format_epc_lines(eoj, get_map):
+            for line in format_epc_lines(eoj, get_map, mra):
                 print(line)
 
     if not eoj_candidates:
@@ -342,6 +566,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
     p_collect.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")
     p_collect.add_argument("--interval", type=float, default=30.0, help="Polling interval seconds")
+    p_collect.add_argument(
+        "--max-update-opc",
+        type=int,
+        default=24,
+        help="Max OPC count per GET request in raw mode; also used as update()->raw switch threshold",
+    )
     p_collect.add_argument("--once", action="store_true", help="Collect only once")
     p_collect.set_defaults(func=None)
 
@@ -358,6 +588,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--eoj",
         default="",
         help="Optional EOJ filter list (comma-separated). Omit to list all discovered objects.",
+    )
+    p_scan.add_argument(
+        "--mra-dir",
+        default="",
+        help="Optional path to extracted MRA JSON directory for EPC name resolution",
     )
     p_scan.add_argument("--listen-host", default="0.0.0.0", help="UDP bind host")
     p_scan.add_argument("--listen-port", type=int, default=3610, help="UDP bind port")
