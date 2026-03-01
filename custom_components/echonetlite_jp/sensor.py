@@ -48,7 +48,9 @@ async def async_setup_entry(
             return out
         for epc_key in values:
             if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                out.append(epc_key.upper())
+                normalized = _normalize_epc_key(epc_key)
+                if normalized:
+                    out.append(normalized)
         return out
 
     def current_entity_keys() -> list[tuple[str, str]]:
@@ -61,7 +63,9 @@ async def async_setup_entry(
                 payload = {}
             for epc_key in payload.keys():
                 if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                    pairs.append((target_key, epc_key.upper()))
+                    normalized = _normalize_epc_key(epc_key)
+                    if normalized:
+                        pairs.append((target_key, normalized))
             for epc_key in _epc_keys_from_map(get_map):
                 pairs.append((target_key, epc_key))
             for epc_key in _epc_keys_from_map(set_map):
@@ -91,7 +95,7 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
     def __init__(self, coordinator: HemsEchonetCoordinator, target_key: str, epc_key: str) -> None:
         super().__init__(coordinator)
         self._target_key = target_key
-        self._epc_key = epc_key.upper()
+        self._epc_key = _normalize_epc_key(epc_key) or epc_key
         self._attr_unique_id = f"{DOMAIN}-{target_key}-{self._epc_key}"
         self._value_override: Any = None
         self._last_get_error: str | None = None
@@ -291,7 +295,9 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
             return out
         for epc_key in values:
             if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                out.append(epc_key.upper())
+                normalized = _normalize_epc_key(epc_key)
+                if normalized:
+                    out.append(normalized)
         return out
 
 
@@ -336,3 +342,14 @@ def _decode_number(value: Any, fmt: str) -> int | float | None:
         return None
     signed = fmt_norm.startswith("int")
     return int.from_bytes(raw, byteorder="big", signed=signed)
+
+
+def _normalize_epc_key(value: str) -> str | None:
+    raw = value.strip()
+    if not _EPC_KEY_RE.fullmatch(raw):
+        return None
+    try:
+        epc = int(raw, 16)
+    except ValueError:
+        return None
+    return f"0x{epc:02X}"

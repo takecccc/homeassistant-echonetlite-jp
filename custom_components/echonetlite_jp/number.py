@@ -70,7 +70,7 @@ class HemsEchonetEpcNumber(CoordinatorEntity[HemsEchonetCoordinator], NumberEnti
     def __init__(self, coordinator: HemsEchonetCoordinator, target_key: str, epc_key: str) -> None:
         super().__init__(coordinator)
         self._target_key = target_key
-        self._epc_key = epc_key.upper()
+        self._epc_key = _normalize_epc_key(epc_key) or epc_key
         self._attr_unique_id = f"{DOMAIN}-{target_key}-{self._epc_key}-number"
         self._value_override: Any = None
         self._last_error: str | None = None
@@ -204,7 +204,9 @@ def _epc_keys_from_map(values: Any) -> list[str]:
         return out
     for epc_key in values:
         if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-            out.append(epc_key.upper())
+            normalized = _normalize_epc_key(epc_key)
+            if normalized:
+                out.append(normalized)
     return out
 
 
@@ -254,3 +256,14 @@ def _decode_numeric(raw_value: Any, meta: dict[str, Any]) -> float | None:
     if isinstance(multiple, (int, float)):
         number *= float(multiple)
     return number
+
+
+def _normalize_epc_key(value: str) -> str | None:
+    raw = value.strip()
+    if not _EPC_KEY_RE.fullmatch(raw):
+        return None
+    try:
+        epc = int(raw, 16)
+    except ValueError:
+        return None
+    return f"0x{epc:02X}"
