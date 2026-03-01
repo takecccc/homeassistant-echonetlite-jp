@@ -18,6 +18,7 @@ from .entity_filter import should_register_epc
 _EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
 _INSTALL_LOCATION_LABELS = {
     "00": "未設定",
+    "FF": "不定",
     "08": "リビング",
     "10": "ダイニング",
     "18": "キッチン",

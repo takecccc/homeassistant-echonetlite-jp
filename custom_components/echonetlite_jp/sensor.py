@@ -51,6 +51,7 @@ _FAULT_STATUS_MAP = {
 }
 _INSTALL_LOCATION_MAP_1BYTE = {
     "00": "未設定",
+    "FF": "不定",
     "08": "リビング",
     "10": "ダイニング",
     "18": "キッチン",
