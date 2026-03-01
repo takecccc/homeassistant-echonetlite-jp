@@ -147,6 +147,8 @@ class MRAClassResolver:
             "base": None,
             "enum": {},
         }
+        if not info["name"] and info["short_name"]:
+            info["name"] = info["short_name"]
         refs = self._collect_refs(prop.get("data"))
         info["refs"] = refs
 

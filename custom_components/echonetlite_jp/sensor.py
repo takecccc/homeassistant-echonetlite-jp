@@ -252,7 +252,11 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
         return self._value_override
 
     def _meta(self) -> dict[str, Any] | None:
-        meta = self.coordinator.client.resolve_epc_metadata(self._target_key, self._epc_key)
+        data = self.coordinator.data.get(self._target_key, {})
+        eoj = str(data.get("eoj") or "").strip()
+        if not eoj:
+            return None
+        meta = self.coordinator.client.resolve_epc_metadata_by_eoj(eoj, self._epc_key)
         if isinstance(meta, dict):
             return meta
         return None

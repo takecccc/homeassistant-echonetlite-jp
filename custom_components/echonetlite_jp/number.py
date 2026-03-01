@@ -39,8 +39,11 @@ async def async_setup_entry(
         pairs: list[tuple[str, str]] = []
         for target_key, data in coordinator.data.items():
             set_map = _epc_keys_from_map(data.get("set_map", []))
+            eoj = str(data.get("eoj") or "").strip()
+            if not eoj:
+                continue
             for epc_key in set_map:
-                meta = coordinator.client.resolve_epc_metadata(target_key, epc_key)
+                meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
                 if not isinstance(meta, dict):
                     continue
                 if str(meta.get("type") or "").strip().lower() != "number":
@@ -192,7 +195,11 @@ class HemsEchonetEpcNumber(CoordinatorEntity[HemsEchonetCoordinator], NumberEnti
         return self._value_override
 
     def _meta(self) -> dict[str, Any] | None:
-        meta = self.coordinator.client.resolve_epc_metadata(self._target_key, self._epc_key)
+        data = self.coordinator.data.get(self._target_key, {})
+        eoj = str(data.get("eoj") or "").strip()
+        if not eoj:
+            return None
+        meta = self.coordinator.client.resolve_epc_metadata_by_eoj(eoj, self._epc_key)
         if isinstance(meta, dict):
             return meta
         return None

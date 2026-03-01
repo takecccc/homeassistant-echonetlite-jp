@@ -220,11 +220,14 @@ class HemsEchonetClient:
         target = self._target_by_key(target_key)
         if target is None:
             return None
+        return self.resolve_epc_metadata_by_eoj(target.eoj, epc_key)
+
+    def resolve_epc_metadata_by_eoj(self, eoj: str, epc_key: str) -> dict[str, Any] | None:
         try:
             epc = self._epc_from_key(epc_key)
         except ValueError:
             return None
-        return self._mra.resolve_property(target.eoj, epc)
+        return self._mra.resolve_property(eoj, epc)
 
     async def _discover_hosts(self) -> list[str]:
         assert self._client is not None

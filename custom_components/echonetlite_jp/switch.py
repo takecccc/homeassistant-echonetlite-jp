@@ -82,11 +82,12 @@ class HemsEchonetEpcSwitch(CoordinatorEntity[HemsEchonetCoordinator], SwitchEnti
         device_name = str(data.get("device_name") or "").strip()
         eoj_desc = str(data.get("eoj_desc") or "").strip()
         eoj = str(data.get("eoj") or "unknown")
+        prop_name = str((self._meta() or {}).get("name") or "").strip()
         base_parts = [
             p for p in (manufacturer, device_name, f"{eoj_desc} ({eoj})" if eoj_desc else eoj) if p
         ]
         base = " ".join(base_parts) if base_parts else f"ECHONET {eoj}"
-        return f"{base} {self._epc_key}"
+        return f"{base} {prop_name or self._epc_key}"
 
     @property
     def available(self) -> bool:
@@ -111,6 +112,7 @@ class HemsEchonetEpcSwitch(CoordinatorEntity[HemsEchonetCoordinator], SwitchEnti
             "eoj": data.get("eoj"),
             "uid": data.get("uid"),
             "epc": self._epc_key,
+            "mra_name": (self._meta() or {}).get("name"),
             "raw_value": raw_value,
             "last_error": self._last_error,
             "errors": data.get("errors", []),
@@ -187,6 +189,16 @@ class HemsEchonetEpcSwitch(CoordinatorEntity[HemsEchonetCoordinator], SwitchEnti
             raise HomeAssistantError(self._last_error) from exc
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
+
+    def _meta(self) -> dict[str, Any] | None:
+        data = self.coordinator.data.get(self._target_key, {})
+        eoj = str(data.get("eoj") or "").strip()
+        if not eoj:
+            return None
+        meta = self.coordinator.client.resolve_epc_metadata_by_eoj(eoj, self._epc_key)
+        if isinstance(meta, dict):
+            return meta
+        return None
 
 
 def _epc_keys_from_map(values: Any) -> list[str]:
