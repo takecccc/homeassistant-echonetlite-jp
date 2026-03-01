@@ -17,7 +17,10 @@
           "max_opc": "Max OPC per request",
           "mra_dir": "MRA directory (optional)",
           "rediscover_on_error": "Rediscover on error",
-          "exclude_unknown_epcs": "Exclude unknown EPC entities"
+          "exclude_unknown_epcs": "Exclude unknown EPC entities",
+          "exclude_metadata_epcs": "Exclude identifier/static EPC entities",
+          "exclude_range_epcs": "Exclude range/query EPC entities",
+          "exclude_auxiliary_epcs": "Exclude auxiliary EPC entities"
         }
       }
     },

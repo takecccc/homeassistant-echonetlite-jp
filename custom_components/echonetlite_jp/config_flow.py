@@ -12,6 +12,9 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import CONF_CIDR
 from .const import CONF_DISCOVERY_WAIT
 from .const import CONF_EOJ
+from .const import CONF_EXCLUDE_AUXILIARY_EPCS
+from .const import CONF_EXCLUDE_METADATA_EPCS
+from .const import CONF_EXCLUDE_RANGE_EPCS
 from .const import CONF_EXCLUDE_UNKNOWN_EPCS
 from .const import CONF_LISTEN_HOST
 from .const import CONF_LISTEN_PORT
@@ -23,6 +26,9 @@ from .const import CONF_TIMEOUT
 from .const import DEFAULT_CIDR
 from .const import DEFAULT_DISCOVERY_WAIT
 from .const import DEFAULT_EOJ
+from .const import DEFAULT_EXCLUDE_AUXILIARY_EPCS
+from .const import DEFAULT_EXCLUDE_METADATA_EPCS
+from .const import DEFAULT_EXCLUDE_RANGE_EPCS
 from .const import DEFAULT_EXCLUDE_UNKNOWN_EPCS
 from .const import DEFAULT_LISTEN_HOST
 from .const import DEFAULT_LISTEN_PORT
@@ -77,6 +83,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(
                     CONF_EXCLUDE_UNKNOWN_EPCS,
                     default=DEFAULT_EXCLUDE_UNKNOWN_EPCS,
+                ): bool,
+                vol.Optional(
+                    CONF_EXCLUDE_METADATA_EPCS,
+                    default=DEFAULT_EXCLUDE_METADATA_EPCS,
+                ): bool,
+                vol.Optional(
+                    CONF_EXCLUDE_RANGE_EPCS,
+                    default=DEFAULT_EXCLUDE_RANGE_EPCS,
+                ): bool,
+                vol.Optional(
+                    CONF_EXCLUDE_AUXILIARY_EPCS,
+                    default=DEFAULT_EXCLUDE_AUXILIARY_EPCS,
                 ): bool,
             }
         )

@@ -37,6 +37,9 @@ cp -r custom_components/echonetlite_jp /config/custom_components/
 - `mra_dir` 未指定時: Integration 同梱の MRA を使用
 - `mra_dir` 指定時: 指定ディレクトリの MRA JSON を優先使用
 - `exclude_unknown_epcs` 既定 `true`: MRAで名称解決できない unknown EPC をエンティティ化しない
+- `exclude_metadata_epcs` 既定 `true`: 識別・静的情報 EPC（例: `0x82/0x83/0x8A-0x8E`）を除外
+- `exclude_range_epcs` 既定 `true`: 範囲指定/クエリ系 EPC を除外
+- `exclude_auxiliary_epcs` 既定 `true`: 補助 EPC（Atomic 補助・単位/係数系）を除外
 - Home Assistant 上のデバイスは `UID + EOJ` 単位で登録
 - DHCPでIPが変わっても `UID` ベースで同一デバイスとして追従
 - デバイス名: `メーカー + デバイス名 + EOJ説明(EOJ)` で表示

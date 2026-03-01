@@ -17,7 +17,10 @@
           "max_opc": "1リクエストあたり最大OPC",
           "mra_dir": "MRAディレクトリ(任意)",
           "rediscover_on_error": "エラー時に再探索",
-          "exclude_unknown_epcs": "unknown EPC のエンティティを除外"
+          "exclude_unknown_epcs": "unknown EPC のエンティティを除外",
+          "exclude_metadata_epcs": "識別・静的情報 EPC を除外",
+          "exclude_range_epcs": "範囲指定/クエリ EPC を除外",
+          "exclude_auxiliary_epcs": "補助 EPC を除外"
         }
       }
     },

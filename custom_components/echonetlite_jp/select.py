@@ -10,13 +10,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_EXCLUDE_UNKNOWN_EPCS
-from .const import DEFAULT_EXCLUDE_UNKNOWN_EPCS
 from .const import DOMAIN
 from .coordinator import HemsEchonetCoordinator
+from .entity_filter import EntityFilterOptions
+from .entity_filter import should_register_epc
 
 _EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
-_EXCLUDED_EPCS = {"0x9D", "0x9E", "0x9F"}
 
 
 async def async_setup_entry(
@@ -26,10 +25,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: HemsEchonetCoordinator = hass.data[DOMAIN][entry.entry_id]
     known_entity_keys: set[tuple[str, str]] = set()
-    merged_config = dict(entry.data) | dict(entry.options)
-    exclude_unknown_epcs = bool(
-        merged_config.get(CONF_EXCLUDE_UNKNOWN_EPCS, DEFAULT_EXCLUDE_UNKNOWN_EPCS)
-    )
+    filter_options = EntityFilterOptions.from_entry(entry)
 
     def current_entity_keys() -> list[tuple[str, str]]:
         pairs: list[tuple[str, str]] = []
@@ -39,12 +35,10 @@ async def async_setup_entry(
             if not eoj:
                 continue
             for epc_key in set_map:
-                if epc_key in _EXCLUDED_EPCS:
+                if not should_register_epc(coordinator.client, eoj, epc_key, filter_options):
                     continue
                 meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
                 if not isinstance(meta, dict):
-                    continue
-                if exclude_unknown_epcs and not str(meta.get("name") or "").strip():
                     continue
                 if str(meta.get("type") or "").strip().lower() != "state":
                     continue

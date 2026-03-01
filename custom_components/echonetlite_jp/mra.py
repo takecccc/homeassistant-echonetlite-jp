@@ -121,6 +121,8 @@ class MRAClassResolver:
         el_props = data.get("elProperties")
         if not isinstance(el_props, list):
             return out
+        atomic_targets: set[int] = set()
+        rows: list[tuple[int, dict[str, Any]]] = []
         for prop in el_props:
             if not isinstance(prop, dict):
                 continue
@@ -128,6 +130,14 @@ class MRAClassResolver:
             if epc is None:
                 continue
             info = self._extract_prop_info(prop)
+            atomic_epc = self._parse_epc(prop.get("atomic"))
+            if atomic_epc is not None:
+                info["atomic"] = f"0x{atomic_epc:02X}"
+                atomic_targets.add(atomic_epc)
+            rows.append((epc, info))
+
+        for epc, info in rows:
+            info["is_atomic_helper"] = epc in atomic_targets
             if epc not in out:
                 out[epc] = info
         return out
