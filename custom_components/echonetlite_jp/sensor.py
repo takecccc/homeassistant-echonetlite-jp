@@ -205,12 +205,31 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
             return None
         meta = self._meta() or {}
         value_type = str(meta.get("type") or "").strip().lower()
+        unit = self.native_unit_of_measurement
+        name = str(meta.get("name") or "")
+        inferred_class = _infer_sensor_device_class(value_type, unit, name)
         decoded = self._decode_value(value)
         if decoded is not None:
             coerced = _coerce_native_value(decoded, value_type)
             if coerced is not None:
                 return coerced
             return decoded
+        # For typed values, avoid raw-string fallback because it can break HA validation
+        # with device_class/state_class (e.g. temperature expects numeric).
+        if value_type in {"number", "level", "state", "time", "date", "date-time"}:
+            return None
+        # Also avoid raw fallback when the sensor class implies typed values.
+        if inferred_class in {
+            SensorDeviceClass.TEMPERATURE,
+            SensorDeviceClass.POWER,
+            SensorDeviceClass.ENERGY,
+            SensorDeviceClass.CURRENT,
+            SensorDeviceClass.VOLTAGE,
+            SensorDeviceClass.FREQUENCY,
+            SensorDeviceClass.DURATION,
+            SensorDeviceClass.DATE,
+        }:
+            return None
         if isinstance(value, bool):
             return value
         if isinstance(value, (int, float)):
@@ -393,6 +412,8 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
             multiple = meta.get("multiple")
             if isinstance(multiple, (int, float)):
                 number = float(number) * float(multiple)
+            if not _in_numeric_range(number, meta):
+                return None
             if isinstance(number, float):
                 number = round(number, 6)
             return number
@@ -885,6 +906,25 @@ def _is_energy_total(unit: str | None, name: str) -> bool:
         return False
     lowered = name.lower()
     return ("積算" in name) or ("cumulative" in lowered)
+
+
+def _in_numeric_range(value: float | int, meta: dict[str, Any]) -> bool:
+    minimum = meta.get("minimum")
+    maximum = meta.get("maximum")
+    multiple = meta.get("multiple")
+
+    lo = float(minimum) if isinstance(minimum, (int, float)) else None
+    hi = float(maximum) if isinstance(maximum, (int, float)) else None
+    if isinstance(multiple, (int, float)):
+        lo = lo * float(multiple) if lo is not None else None
+        hi = hi * float(multiple) if hi is not None else None
+
+    fv = float(value)
+    if lo is not None and fv < lo:
+        return False
+    if hi is not None and fv > hi:
+        return False
+    return True
 
 
 def _normalize_epc_key(value: str) -> str | None:
