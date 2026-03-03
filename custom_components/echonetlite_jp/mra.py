@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -12,10 +13,12 @@ class MRAClassResolver:
         self._class_props: dict[str, dict[int, dict[str, Any]]] = {}
         self._definitions: dict[str, dict[str, Any]] = {}
         self._loaded = False
+        self._root: Path | None = self._resolve_mra_dir(mra_dir)
 
-        path = self._resolve_mra_dir(mra_dir)
-        if path is not None:
-            self._load(path)
+        # Avoid blocking file I/O in HA event loop. In that case, caller should
+        # invoke ensure_loaded() from an executor/to_thread context.
+        if self._root is not None and not self._is_in_running_loop():
+            self._load(self._root)
 
     @property
     def loaded(self) -> bool:
@@ -32,6 +35,13 @@ class MRAClassResolver:
         if "0000" in self._class_props and epc in self._class_props["0000"]:
             return self._class_props["0000"][epc]
         return None
+
+    def ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        if self._root is None:
+            return
+        self._load(self._root)
 
     def _resolve_mra_dir(self, mra_dir: str) -> Path | None:
         if mra_dir.strip():
@@ -82,6 +92,14 @@ class MRAClassResolver:
         for key, value in definitions.items():
             if isinstance(key, str) and isinstance(value, dict):
                 self._definitions[key] = value
+
+    @staticmethod
+    def _is_in_running_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
 
     @staticmethod
     def _class_code_from_path(path: Path) -> str | None:

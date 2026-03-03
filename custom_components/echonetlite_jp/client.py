@@ -100,6 +100,7 @@ class HemsEchonetClient:
         return self._targets
 
     async def async_initialize(self) -> None:
+        await asyncio.to_thread(self._mra.ensure_loaded)
         loop = asyncio.get_running_loop()
         self._udp = _ManagedUDPServer()
         self._udp.run(self._listen_host, self._listen_port, loop=loop)
