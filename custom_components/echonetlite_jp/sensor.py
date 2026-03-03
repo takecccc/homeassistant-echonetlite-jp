@@ -516,7 +516,14 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
 
     @property
     def available(self) -> bool:
-        return self.native_value is not None
+        data = self.coordinator.data.get(self._target_key, {})
+        payload = data.get("payload", {})
+        in_payload = isinstance(payload, dict) and self._epc_key in payload
+        if in_payload:
+            return True
+        get_map = _epc_keys_from_map(data.get("get_map", []))
+        set_map = _epc_keys_from_map(data.get("set_map", []))
+        return self._epc_key in get_map or self._epc_key in set_map
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
