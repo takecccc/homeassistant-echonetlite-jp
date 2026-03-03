@@ -428,8 +428,12 @@ class HemsEchonetClient:
                     payload[epc_key] = value
             if value is None:
                 continue
+            token = self._normalize_fixed_hex_token(value, size=8)
+            if not token:
+                continue
             vkey = self._virtual_0287_key(channel)
-            payload[vkey] = value
+            payload[epc_key] = token
+            payload[vkey] = token
             out.append(vkey)
         return out
 
@@ -681,6 +685,21 @@ class HemsEchonetClient:
         if len(token) % 2 != 0:
             token = f"0{token}"
         if not all(ch in "0123456789ABCDEF" for ch in token):
+            return ""
+        return token
+
+    @classmethod
+    def _normalize_fixed_hex_token(cls, value: Any, size: int) -> str:
+        token = cls._normalize_hex_token(value)
+        if not token:
+            return ""
+        width = int(size) * 2
+        if width <= 0:
+            return ""
+        if len(token) > width:
+            return ""
+        token = token.zfill(width)
+        if len(token) != width:
             return ""
         return token
 
