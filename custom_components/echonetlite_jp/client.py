@@ -308,6 +308,31 @@ class HemsEchonetClient:
             fetch_range=fetch_range,
             item_size=4,
         )
+        # Some devices expose only duplex lists for channel-range retrieval.
+        if not energy_by_ch:
+            energy_by_ch = await self._fetch_0287_duplex_energy_list(
+                host,
+                eoj_gc,
+                eoj_cc,
+                eoj_ci,
+                range_epc=0xB9,
+                list_epc=0xBA,
+                start_channel=start_channel,
+                fetch_range=fetch_range,
+            )
+        if not current_by_ch:
+            current_by_ch = await self._fetch_0287_simplex_list(
+                host,
+                eoj_gc,
+                eoj_cc,
+                eoj_ci,
+                get_map,
+                range_epc=0xBB,
+                list_epc=0xBC,
+                start_channel=start_channel,
+                fetch_range=fetch_range,
+                item_size=4,
+            )
 
         synthetic_get_map: list[int] = []
         for ch in range(start_channel, max_channel + 1):
@@ -370,6 +395,37 @@ class HemsEchonetClient:
             channel = reported_start + i
             chunk = body[i * item_size : (i + 1) * item_size]
             out[channel] = chunk.hex().upper()
+        return out
+
+    async def _fetch_0287_duplex_energy_list(
+        self,
+        host: str,
+        eoj_gc: int,
+        eoj_cc: int,
+        eoj_ci: int,
+        *,
+        range_epc: int,
+        list_epc: int,
+        start_channel: int,
+        fetch_range: int,
+    ) -> dict[int, str]:
+        # BA item is 8 bytes: normal(4) + reverse(4). Use normal direction to keep D0-compatible shape.
+        raw_items = await self._fetch_0287_simplex_list(
+            host,
+            eoj_gc,
+            eoj_cc,
+            eoj_ci,
+            get_map=[],
+            range_epc=range_epc,
+            list_epc=list_epc,
+            start_channel=start_channel,
+            fetch_range=fetch_range,
+            item_size=8,
+        )
+        out: dict[int, str] = {}
+        for ch, token in raw_items.items():
+            if isinstance(token, str) and len(token) >= 8:
+                out[ch] = token[:8]
         return out
 
     async def _discover_hosts(self) -> list[str]:
