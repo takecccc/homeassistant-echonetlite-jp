@@ -22,6 +22,7 @@ from .entity_filter import EntityFilterOptions
 from .entity_filter import should_register_epc
 
 _EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
+_VIRTUAL_KEY_RE = re.compile(r"^v[0-9a-z_]+$")
 _UNIT_MAP = {
     "Celsius": "°C",
     "celsius": "°C",
@@ -86,13 +87,13 @@ async def async_setup_entry(
     platform.async_register_entity_service("set_epc", {"edt": cv.string}, "async_set_epc")
     platform.async_register_entity_service("set_epc_value", {"value": cv.match_all}, "async_set_epc_value")
 
-    def _epc_keys_from_map(values: Any) -> list[str]:
+    def _property_keys_from_map(values: Any) -> list[str]:
         out: list[str] = []
         if not isinstance(values, list):
             return out
         for epc_key in values:
-            if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                normalized = _normalize_epc_key(epc_key)
+            if isinstance(epc_key, str):
+                normalized = _normalize_property_key(epc_key)
                 if normalized:
                     out.append(normalized)
         return out
@@ -109,8 +110,8 @@ async def async_setup_entry(
             if not isinstance(payload, dict):
                 payload = {}
             for epc_key in payload.keys():
-                if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                    normalized = _normalize_epc_key(epc_key)
+                if isinstance(epc_key, str):
+                    normalized = _normalize_property_key(epc_key)
                     if normalized and should_register_epc(
                         coordinator.client, eoj, normalized, filter_options
                     ):
@@ -121,7 +122,7 @@ async def async_setup_entry(
                                 pairs.append((target_key, normalized, field["key"]))
                         else:
                             pairs.append((target_key, normalized, "base"))
-            for epc_key in _epc_keys_from_map(get_map):
+            for epc_key in _property_keys_from_map(get_map):
                 if should_register_epc(coordinator.client, eoj, epc_key, filter_options):
                     meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
                     fields = _composite_field_specs(epc_key, meta)
@@ -130,7 +131,7 @@ async def async_setup_entry(
                             pairs.append((target_key, epc_key, field["key"]))
                     else:
                         pairs.append((target_key, epc_key, "base"))
-            for epc_key in _epc_keys_from_map(set_map):
+            for epc_key in _property_keys_from_map(set_map):
                 if should_register_epc(coordinator.client, eoj, epc_key, filter_options):
                     meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
                     fields = _composite_field_specs(epc_key, meta)
@@ -168,7 +169,7 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
     def __init__(self, coordinator: HemsEchonetCoordinator, target_key: str, epc_key: str) -> None:
         super().__init__(coordinator)
         self._target_key = target_key
-        self._epc_key = _normalize_epc_key(epc_key) or epc_key
+        self._epc_key = _normalize_property_key(epc_key) or epc_key
         self._attr_unique_id = f"{DOMAIN}-{target_key}-{self._epc_key}"
         self._value_override: Any = None
         self._last_get_error: str | None = None
@@ -275,8 +276,8 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
         raw_value = None
         if isinstance(payload, dict):
             raw_value = payload.get(self._epc_key)
-        get_map = self._epc_keys_from_map(data.get("get_map", []))
-        set_map = self._epc_keys_from_map(data.get("set_map", []))
+        get_map = self._property_keys_from_map(data.get("get_map", []))
+        set_map = self._property_keys_from_map(data.get("set_map", []))
         gettable = self._epc_key in get_map
         settable = self._epc_key in set_map
         meta = self._meta()
@@ -427,18 +428,18 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
         return _decode_composite_values(self._epc_key, meta, raw_value, payload_map)
 
     def _epc_supported(self, data: dict[str, Any]) -> bool:
-        get_map = self._epc_keys_from_map(data.get("get_map", []))
-        set_map = self._epc_keys_from_map(data.get("set_map", []))
+        get_map = self._property_keys_from_map(data.get("get_map", []))
+        set_map = self._property_keys_from_map(data.get("set_map", []))
         return self._epc_key in get_map or self._epc_key in set_map
 
     @staticmethod
-    def _epc_keys_from_map(values: Any) -> list[str]:
+    def _property_keys_from_map(values: Any) -> list[str]:
         out: list[str] = []
         if not isinstance(values, list):
             return out
         for epc_key in values:
-            if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                normalized = _normalize_epc_key(epc_key)
+            if isinstance(epc_key, str):
+                normalized = _normalize_property_key(epc_key)
                 if normalized:
                     out.append(normalized)
         return out
@@ -452,7 +453,7 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
     ) -> None:
         super().__init__(coordinator)
         self._target_key = target_key
-        self._epc_key = _normalize_epc_key(epc_key) or epc_key
+        self._epc_key = _normalize_property_key(epc_key) or epc_key
         self._field_key = field_key
         self._attr_unique_id = f"{DOMAIN}-{target_key}-{self._epc_key}-{self._field_key}"
 
@@ -521,8 +522,8 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
         in_payload = isinstance(payload, dict) and self._epc_key in payload
         if in_payload:
             return True
-        get_map = _epc_keys_from_map(data.get("get_map", []))
-        set_map = _epc_keys_from_map(data.get("set_map", []))
+        get_map = _property_keys_from_map(data.get("get_map", []))
+        set_map = _property_keys_from_map(data.get("set_map", []))
         return self._epc_key in get_map or self._epc_key in set_map
 
     @property
@@ -934,6 +935,19 @@ def _in_numeric_range(value: float | int, meta: dict[str, Any]) -> bool:
     return True
 
 
+def _property_keys_from_map(values: Any) -> list[str]:
+    out: list[str] = []
+    if not isinstance(values, list):
+        return out
+    for key in values:
+        if not isinstance(key, str):
+            continue
+        normalized = _normalize_property_key(key)
+        if normalized:
+            out.append(normalized)
+    return out
+
+
 def _normalize_epc_key(value: str) -> str | None:
     raw = value.strip()
     if not _EPC_KEY_RE.fullmatch(raw):
@@ -943,3 +957,13 @@ def _normalize_epc_key(value: str) -> str | None:
     except ValueError:
         return None
     return f"0x{epc:02X}"
+
+
+def _normalize_property_key(value: str) -> str | None:
+    epc = _normalize_epc_key(value)
+    if epc:
+        return epc
+    raw = value.strip().lower()
+    if not _VIRTUAL_KEY_RE.fullmatch(raw):
+        return None
+    return raw

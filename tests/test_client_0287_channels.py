@@ -50,14 +50,13 @@ async def test_augment_0287_channels_simplex(client: HemsEchonetClient, monkeypa
         eoj_cc=0x87,
         eoj_ci=0x01,
         get_map=[0xB3, 0xB5],
-        set_map=[0xB2, 0xB4],
         payload=payload,
     )
 
-    assert extra == [0xF0, 0xF1, 0xF2]
-    assert payload["0xF0"] == "00000064000A000B"
-    assert payload["0xF1"] == "00000065000C000D"
-    assert payload["0xF2"] == "00000066000E000F"
+    assert extra == ["v0287_ch33", "v0287_ch34", "v0287_ch35"]
+    assert payload["v0287_ch33"] == "00000064000A000B"
+    assert payload["v0287_ch34"] == "00000065000C000D"
+    assert payload["v0287_ch35"] == "00000066000E000F"
 
 
 @pytest.mark.asyncio
@@ -81,17 +80,16 @@ async def test_augment_0287_channels_duplex_fallback(client: HemsEchonetClient, 
         eoj_cc=0x87,
         eoj_ci=0x01,
         get_map=[0xBA, 0xBC],
-        set_map=[0xB9, 0xBB],
         payload=payload,
     )
 
-    assert extra == [0xF0, 0xF1]
-    assert payload["0xF0"] == "000000AA00100020"
-    assert payload["0xF1"] == "000000BB00300040"
+    assert extra == ["v0287_ch33", "v0287_ch34"]
+    assert payload["v0287_ch33"] == "000000AA00100020"
+    assert payload["v0287_ch34"] == "000000BB00300040"
 
 
-def test_resolve_metadata_for_synthetic_channel(client: HemsEchonetClient) -> None:
-    meta = client.resolve_epc_metadata_by_eoj("028701", "0xF0")
+def test_resolve_metadata_for_virtual_channel(client: HemsEchonetClient) -> None:
+    meta = client.resolve_epc_metadata_by_eoj("028701", "v0287_ch33")
     assert isinstance(meta, dict)
     assert meta["name"] == "計測チャンネル33"
     assert meta["short_name"] == "measurementChannel33"

@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +16,8 @@ from pychonet.lib.const import SETC
 from pychonet.lib.udpserver import UDPServer
 
 from .mra import MRAClassResolver
+
+_VIRTUAL_0287_RE = re.compile(r"^v0287_ch([3-4][0-9])$")
 
 
 class _ManagedUDPServer(UDPServer):
@@ -161,10 +164,10 @@ class HemsEchonetClient:
             try:
                 get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
                 payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
-                extra_get_map = await self._augment_0287_channels(
-                    target.host, gc, cc, ci, get_map, set_map, payload
+                extra_virtual_keys = await self._augment_0287_channels(
+                    target.host, gc, cc, ci, get_map, payload
                 )
-                merged_get_map = sorted(set(get_map + extra_get_map))
+                merged_get_map = [self._epc_to_key(epc) for epc in get_map] + extra_virtual_keys
                 out[key] = {
                     "host": target.host,
                     "eoj": target.eoj,
@@ -174,7 +177,7 @@ class HemsEchonetClient:
                     "product_code": target.product_code,
                     "eoj_desc": target.eoj_desc,
                     "payload": payload,
-                    "get_map": [self._epc_to_key(epc) for epc in merged_get_map],
+                    "get_map": sorted(set(merged_get_map)),
                     "set_map": [self._epc_to_key(epc) for epc in set_map],
                     "errors": payload.get("_errors", []),
                 }
@@ -210,26 +213,32 @@ class HemsEchonetClient:
         target = self._target_by_key(target_key)
         if target is None:
             raise KeyError(f"target not found: {target_key}")
-        epc = self._epc_from_key(epc_key)
         gc, cc, ci = self._parse_eoj(target.eoj)
         get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
-        if epc in get_map:
-            ok = await self._client.echonetMessage(target.host, gc, cc, ci, GET, [{"EPC": epc}])
-            if not ok:
-                raise TimeoutError(f"GET timeout: {target.host} {target.eoj} {self._epc_to_key(epc)}")
-            state = getattr(self._client, "_state", {})
-            instance = self._get_instance_state(state, target.host, gc, cc, ci)
-            return self._normalize_epc_value(instance.get(epc))
+        try:
+            epc = self._epc_from_key(epc_key)
+        except ValueError:
+            epc = None
+        if epc is not None:
+            if epc in get_map:
+                ok = await self._client.echonetMessage(target.host, gc, cc, ci, GET, [{"EPC": epc}])
+                if not ok:
+                    raise TimeoutError(f"GET timeout: {target.host} {target.eoj} {self._epc_to_key(epc)}")
+                state = getattr(self._client, "_state", {})
+                instance = self._get_instance_state(state, target.host, gc, cc, ci)
+                return self._normalize_epc_value(instance.get(epc))
+            raise ValueError(f"{self._epc_to_key(epc)} is not in get-map")
 
-        # Synthetic EPCs for 0x0287 channel 33+.
-        if self._class_code_from_eoj(target.eoj) == "0287" and 0xF0 <= epc <= 0xF8:
+        # Virtual keys for 0x0287 channel 33+.
+        if self._class_code_from_eoj(target.eoj) == "0287" and self._virtual_0287_channel(epc_key):
             payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
-            extra_get_map = await self._augment_0287_channels(
-                target.host, gc, cc, ci, get_map, set_map, payload
+            extra_virtual_keys = await self._augment_0287_channels(
+                target.host, gc, cc, ci, get_map, payload
             )
-            if epc in extra_get_map:
-                return payload.get(self._epc_to_key(epc))
-        raise ValueError(f"{self._epc_to_key(epc)} is not in get-map")
+            key = epc_key.strip().lower()
+            if key in extra_virtual_keys:
+                return payload.get(key)
+        raise ValueError(f"{epc_key} is not in get-map")
 
     async def async_set_epc(self, target_key: str, epc_key: str, edt_hex: str) -> Any:
         edt = self._parse_edt_hex(edt_hex)
@@ -270,20 +279,19 @@ class HemsEchonetClient:
         try:
             epc = self._epc_from_key(epc_key)
         except ValueError:
-            return None
-        meta = self._mra.resolve_property(eoj, epc)
-        if isinstance(meta, dict):
-            return meta
-        # 0x0287 channel 33+ synthetic EPCs (0xF0-0xF8).
-        if self._class_code_from_eoj(eoj) == "0287" and 0xF0 <= epc <= 0xF8:
+            channel = self._virtual_0287_channel(epc_key)
+            if self._class_code_from_eoj(eoj) != "0287" or channel is None:
+                return None
             base = self._mra.resolve_property(eoj, 0xD0)
             if not isinstance(base, dict):
                 return None
-            channel = 33 + (epc - 0xF0)
             out = dict(base)
             out["name"] = f"計測チャンネル{channel}"
             out["short_name"] = f"measurementChannel{channel}"
             return out
+        meta = self._mra.resolve_property(eoj, epc)
+        if isinstance(meta, dict):
+            return meta
         return None
 
     async def _augment_0287_channels(
@@ -293,14 +301,25 @@ class HemsEchonetClient:
         eoj_cc: int,
         eoj_ci: int,
         get_map: list[int],
-        set_map: list[int],
         payload: dict[str, Any],
-    ) -> list[int]:
+    ) -> list[str]:
         # Power distribution board metering: channel 33+ is retrieved via range list EPCs.
         if eoj_gc != 0x02 or eoj_cc != 0x87:
             return []
-        count_simplex = self._decode_channel_count(payload.get("0xB1"))
-        count_duplex = self._decode_channel_count(payload.get("0xB8"))
+        # Some devices don't expose B1/B8 in get-map although direct GET works.
+        b1 = payload.get("0xB1")
+        if b1 is None:
+            b1 = await self._get_single_epc_value(host, eoj_gc, eoj_cc, eoj_ci, 0xB1)
+            if b1 is not None:
+                payload["0xB1"] = b1
+        b8 = payload.get("0xB8")
+        if b8 is None:
+            b8 = await self._get_single_epc_value(host, eoj_gc, eoj_cc, eoj_ci, 0xB8)
+            if b8 is not None:
+                payload["0xB8"] = b8
+
+        count_simplex = self._decode_channel_count(b1)
+        count_duplex = self._decode_channel_count(b8)
         candidates = [c for c in (count_simplex, count_duplex) if isinstance(c, int)]
         if not candidates:
             return []
@@ -362,7 +381,7 @@ class HemsEchonetClient:
                 item_size=4,
             )
 
-        synthetic_get_map: list[int] = []
+        virtual_get_map: list[str] = []
         for ch in range(start_channel, max_channel + 1):
             # Fallback to no-data values when one of list fetches is missing.
             energy = energy_by_ch.get(ch, "FFFFFFFE")
@@ -371,10 +390,10 @@ class HemsEchonetClient:
                 energy = "FFFFFFFE"
             if len(current) != 8:
                 current = "7FFE7FFE"
-            synthetic_epc = 0xF0 + (ch - 33)
-            payload[self._epc_to_key(synthetic_epc)] = f"{energy}{current}"
-            synthetic_get_map.append(synthetic_epc)
-        return synthetic_get_map
+            key = self._virtual_0287_key(ch)
+            payload[key] = f"{energy}{current}"
+            virtual_get_map.append(key)
+        return virtual_get_map
 
     async def _fetch_0287_simplex_list(
         self,
@@ -421,6 +440,20 @@ class HemsEchonetClient:
             chunk = body[i * item_size : (i + 1) * item_size]
             out[channel] = chunk.hex().upper()
         return out
+
+    async def _get_single_epc_value(
+        self, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int, epc: int
+    ) -> Any | None:
+        assert self._client is not None
+        try:
+            ok = await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, GET, [{"EPC": epc}])
+            if not ok:
+                return None
+            state = getattr(self._client, "_state", {})
+            instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
+            return self._normalize_epc_value(instance.get(epc))
+        except Exception:
+            return None
 
     async def _fetch_0287_duplex_energy_list(
         self,
@@ -557,6 +590,24 @@ class HemsEchonetClient:
     @staticmethod
     def _epc_to_key(epc: int) -> str:
         return f"0x{int(epc):02X}"
+
+    @staticmethod
+    def _virtual_0287_key(channel: int) -> str:
+        return f"v0287_ch{int(channel)}"
+
+    @staticmethod
+    def _virtual_0287_channel(key: str) -> int | None:
+        token = key.strip().lower()
+        match = _VIRTUAL_0287_RE.fullmatch(token)
+        if not match:
+            return None
+        try:
+            channel = int(match.group(1))
+        except ValueError:
+            return None
+        if 33 <= channel <= 41:
+            return channel
+        return None
 
     @staticmethod
     def _class_code_from_eoj(eoj: str) -> str:

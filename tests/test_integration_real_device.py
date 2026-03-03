@@ -127,13 +127,13 @@ async def test_real_device_0287_extended_channels_if_applicable(socket_enabled: 
             pytest.skip(f"device reports up to {count} channels; no 33+ verification needed")
 
         max_channel = min(count, 41)
-        expected_epcs = [f"0x{(0xF0 + (ch - 33)):02X}" for ch in range(33, max_channel + 1)]
+        expected_keys = [f"v0287_ch{ch}" for ch in range(33, max_channel + 1)]
 
         get_map = target.get("get_map", [])
         if not isinstance(get_map, list):
             get_map = []
 
-        missing = [epc for epc in expected_epcs if epc not in payload or epc not in get_map]
-        assert not missing, f"missing synthetic 33+ channel EPCs: {missing}"
+        missing = [key for key in expected_keys if key not in payload or key not in get_map]
+        assert not missing, f"missing virtual 33+ channel keys: {missing}"
     finally:
         await client.async_shutdown()
