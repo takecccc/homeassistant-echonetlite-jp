@@ -50,6 +50,7 @@ async def test_augment_0287_channels_simplex(client: HemsEchonetClient, monkeypa
         eoj_cc=0x87,
         eoj_ci=0x01,
         get_map=[0xB3, 0xB5],
+        set_map=[0xB2, 0xB4],
         payload=payload,
     )
 
@@ -80,12 +81,45 @@ async def test_augment_0287_channels_duplex_fallback(client: HemsEchonetClient, 
         eoj_cc=0x87,
         eoj_ci=0x01,
         get_map=[0xBA, 0xBC],
+        set_map=[0xB9, 0xBB],
         payload=payload,
     )
 
     assert extra == ["v0287_ch33", "v0287_ch34"]
     assert payload["v0287_ch33"] == "000000AA00100020"
     assert payload["v0287_ch34"] == "000000BB00300040"
+
+
+@pytest.mark.asyncio
+async def test_augment_0287_channels_prefers_direct_f0_to_f8(
+    client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_simplex(*args, **kwargs):
+        raise AssertionError("range list path must not be used when 0xF0.. is available")
+
+    async def fail_duplex(*args, **kwargs):
+        raise AssertionError("range list path must not be used when 0xF0.. is available")
+
+    monkeypatch.setattr(client, "_fetch_0287_simplex_list", fail_simplex)
+    monkeypatch.setattr(client, "_fetch_0287_duplex_energy_list", fail_duplex)
+
+    payload = {
+        "0xF0": "00000064000A000B",
+        "0xF1": "00000065000C000D",
+    }
+    extra = await client._augment_0287_channels(
+        host="127.0.0.1",
+        eoj_gc=0x02,
+        eoj_cc=0x87,
+        eoj_ci=0x01,
+        get_map=[0xF0, 0xF1],
+        set_map=[],
+        payload=payload,
+    )
+
+    assert extra == ["v0287_ch33", "v0287_ch34"]
+    assert payload["v0287_ch33"] == "00000064000A000B"
+    assert payload["v0287_ch34"] == "00000065000C000D"
 
 
 def test_resolve_metadata_for_virtual_channel(client: HemsEchonetClient) -> None:

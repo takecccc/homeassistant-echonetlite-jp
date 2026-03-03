@@ -165,7 +165,7 @@ class HemsEchonetClient:
                 get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
                 payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
                 extra_virtual_keys = await self._augment_0287_channels(
-                    target.host, gc, cc, ci, get_map, payload
+                    target.host, gc, cc, ci, get_map, set_map, payload
                 )
                 merged_get_map = [self._epc_to_key(epc) for epc in get_map] + extra_virtual_keys
                 out[key] = {
@@ -233,7 +233,7 @@ class HemsEchonetClient:
         if self._class_code_from_eoj(target.eoj) == "0287" and self._virtual_0287_channel(epc_key):
             payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
             extra_virtual_keys = await self._augment_0287_channels(
-                target.host, gc, cc, ci, get_map, payload
+                target.host, gc, cc, ci, get_map, set_map, payload
             )
             key = epc_key.strip().lower()
             if key in extra_virtual_keys:
@@ -301,11 +301,19 @@ class HemsEchonetClient:
         eoj_cc: int,
         eoj_ci: int,
         get_map: list[int],
+        set_map: list[int],
         payload: dict[str, Any],
     ) -> list[str]:
         # Power distribution board metering: channel 33+ is retrieved via range list EPCs.
         if eoj_gc != 0x02 or eoj_cc != 0x87:
             return []
+        # Some vendor implementations expose channel 33+ directly on 0xF0..0xF8.
+        # If available, prefer direct GET values and map them to virtual keys.
+        direct_virtual = await self._map_0287_direct_epcs(
+            host, eoj_gc, eoj_cc, eoj_ci, get_map, payload
+        )
+        if direct_virtual:
+            return direct_virtual
         # Some devices don't expose B1/B8 in get-map although direct GET works.
         b1 = payload.get("0xB1")
         if b1 is None:
@@ -344,6 +352,7 @@ class HemsEchonetClient:
             start_channel=start_channel,
             fetch_range=fetch_range,
             item_size=4,
+            can_set_range=(0xB2 in set_map),
         )
         current_by_ch = await self._fetch_0287_simplex_list(
             host,
@@ -355,6 +364,7 @@ class HemsEchonetClient:
             start_channel=start_channel,
             fetch_range=fetch_range,
             item_size=4,
+            can_set_range=(0xB4 in set_map),
         )
         # Some devices expose only duplex lists for channel-range retrieval.
         if not energy_by_ch:
@@ -379,6 +389,7 @@ class HemsEchonetClient:
                 start_channel=start_channel,
                 fetch_range=fetch_range,
                 item_size=4,
+                can_set_range=(0xBB in set_map),
             )
 
         virtual_get_map: list[str] = []
@@ -395,6 +406,33 @@ class HemsEchonetClient:
             virtual_get_map.append(key)
         return virtual_get_map
 
+    async def _map_0287_direct_epcs(
+        self,
+        host: str,
+        eoj_gc: int,
+        eoj_cc: int,
+        eoj_ci: int,
+        get_map: list[int],
+        payload: dict[str, Any],
+    ) -> list[str]:
+        out: list[str] = []
+        for channel in range(33, 42):
+            epc = 0xF0 + (channel - 33)
+            if epc not in get_map:
+                continue
+            epc_key = self._epc_to_key(epc)
+            value = payload.get(epc_key)
+            if value is None:
+                value = await self._get_single_epc_value(host, eoj_gc, eoj_cc, eoj_ci, epc)
+                if value is not None:
+                    payload[epc_key] = value
+            if value is None:
+                continue
+            vkey = self._virtual_0287_key(channel)
+            payload[vkey] = value
+            out.append(vkey)
+        return out
+
     async def _fetch_0287_simplex_list(
         self,
         host: str,
@@ -407,13 +445,17 @@ class HemsEchonetClient:
         start_channel: int,
         fetch_range: int,
         item_size: int,
+        can_set_range: bool = True,
     ) -> dict[int, str]:
         assert self._client is not None
-        edt = bytes([start_channel & 0xFF, fetch_range & 0xFF])
-        set_opc = [{"EPC": range_epc, "PDC": len(edt), "EDT": int.from_bytes(edt, "big")}]
-        ok = await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, SETC, set_opc)
-        if not ok:
-            return {}
+        if can_set_range:
+            edt = bytes([start_channel & 0xFF, fetch_range & 0xFF])
+            set_opc = [{"EPC": range_epc, "PDC": len(edt), "EDT": int.from_bytes(edt, "big")}]
+            # Even if SETC fails, some devices still return a fixed/default list by GET.
+            try:
+                await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, SETC, set_opc)
+            except Exception:
+                pass
         ok = await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, GET, [{"EPC": list_epc}])
         if not ok:
             return {}
