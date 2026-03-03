@@ -1,0 +1,37 @@
+get_epc:
+  name: Get EPC
+  description: Request the latest value for the target EPC entity.
+  target:
+    entity:
+      integration: echonetlite_jp
+      domain: sensor
+
+set_epc:
+  name: Set EPC (hex EDT)
+  description: Set EPC value with EDT hex string (example: 30, 3132, 0x30).
+  target:
+    entity:
+      integration: echonetlite_jp
+      domain: sensor
+  fields:
+    edt:
+      name: EDT
+      description: Hexadecimal EDT payload.
+      required: true
+      example: "30"
+      selector:
+        text:
+
+set_epc_value:
+  name: Set EPC (typed value)
+  description: Set EPC with typed value based on MRA metadata.
+  target:
+    entity:
+      integration: echonetlite_jp
+      domain: sensor
+  fields:
+    value:
+      name: Value
+      description: Typed value (number/state label/boolean depending on EPC).
+      required: true
+      example: 1
