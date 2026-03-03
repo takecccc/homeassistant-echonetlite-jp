@@ -17,6 +17,31 @@ from pychonet.lib.udpserver import UDPServer
 from .mra import MRAClassResolver
 
 
+class _ManagedUDPServer(UDPServer):
+    """UDPServer with explicit lifecycle control for tests and clean shutdown."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._tasks: list[asyncio.Task[Any]] = []
+
+    def _run_future(self, *args: Any) -> None:
+        for fut in args:
+            task = asyncio.ensure_future(fut, loop=self.loop)
+            self._tasks.append(task)
+
+    async def async_close(self) -> None:
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
 @dataclass(frozen=True)
 class Target:
     host: str
@@ -62,7 +87,7 @@ class HemsEchonetClient:
         self._debug = debug
         self._mra = MRAClassResolver(mra_dir)
 
-        self._udp: UDPServer | None = None
+        self._udp: _ManagedUDPServer | None = None
         self._client: ECHONETAPIClient | None = None
         self._targets: list[Target] = []
         self._next_refresh_at: float | None = None
@@ -73,10 +98,16 @@ class HemsEchonetClient:
 
     async def async_initialize(self) -> None:
         loop = asyncio.get_running_loop()
-        self._udp = UDPServer()
+        self._udp = _ManagedUDPServer()
         self._udp.run(self._listen_host, self._listen_port, loop=loop)
         self._client = ECHONETAPIClient(server=self._udp)
         await self.async_refresh_inventory()
+
+    async def async_shutdown(self) -> None:
+        if self._udp is not None:
+            await self._udp.async_close()
+        self._udp = None
+        self._client = None
 
     async def async_refresh_inventory(self) -> None:
         assert self._client is not None
@@ -289,7 +320,6 @@ class HemsEchonetClient:
             eoj_gc,
             eoj_cc,
             eoj_ci,
-            get_map,
             range_epc=0xB2,
             list_epc=0xB3,
             start_channel=start_channel,
@@ -301,7 +331,6 @@ class HemsEchonetClient:
             eoj_gc,
             eoj_cc,
             eoj_ci,
-            get_map,
             range_epc=0xB4,
             list_epc=0xB5,
             start_channel=start_channel,
@@ -326,7 +355,6 @@ class HemsEchonetClient:
                 eoj_gc,
                 eoj_cc,
                 eoj_ci,
-                get_map,
                 range_epc=0xBB,
                 list_epc=0xBC,
                 start_channel=start_channel,
@@ -354,7 +382,6 @@ class HemsEchonetClient:
         eoj_gc: int,
         eoj_cc: int,
         eoj_ci: int,
-        get_map: list[int],
         *,
         range_epc: int,
         list_epc: int,
@@ -363,8 +390,6 @@ class HemsEchonetClient:
         item_size: int,
     ) -> dict[int, str]:
         assert self._client is not None
-        if list_epc not in get_map:
-            return {}
         edt = bytes([start_channel & 0xFF, fetch_range & 0xFF])
         set_opc = [{"EPC": range_epc, "PDC": len(edt), "EDT": int.from_bytes(edt, "big")}]
         ok = await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, SETC, set_opc)
@@ -415,7 +440,6 @@ class HemsEchonetClient:
             eoj_gc,
             eoj_cc,
             eoj_ci,
-            get_map=[],
             range_epc=range_epc,
             list_epc=list_epc,
             start_channel=start_channel,
