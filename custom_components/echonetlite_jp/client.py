@@ -164,7 +164,8 @@ class HemsEchonetClient:
             key = target.key
             try:
                 get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
-                payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
+                fetch_map = self._build_fetch_map(target.eoj, get_map)
+                payload = await self._fetch_raw_payload(target.host, gc, cc, ci, fetch_map)
                 extra_virtual_keys = await self._augment_0287_channels(
                     target.host, gc, cc, ci, get_map, set_map, payload
                 )
@@ -221,6 +222,15 @@ class HemsEchonetClient:
         except ValueError:
             epc = None
         if epc is not None:
+            # 0x0287: D0..EF are sourced from channel lists, not direct EPC GET.
+            if self._class_code_from_eoj(target.eoj) == "0287" and 0xD0 <= epc <= 0xEF:
+                fetch_map = self._build_fetch_map(target.eoj, get_map)
+                payload = await self._fetch_raw_payload(target.host, gc, cc, ci, fetch_map)
+                await self._augment_0287_channels(target.host, gc, cc, ci, get_map, set_map, payload)
+                value = payload.get(self._epc_to_key(epc))
+                if value is not None:
+                    return value
+                raise ValueError(f"{self._epc_to_key(epc)} is not available from list data")
             if epc in get_map:
                 ok = await self._client.echonetMessage(target.host, gc, cc, ci, GET, [{"EPC": epc}])
                 if not ok:
@@ -322,6 +332,7 @@ class HemsEchonetClient:
 
         count_simplex = self._decode_channel_count(b1)
         count_duplex = self._decode_channel_count(b8)
+        count_both_known = isinstance(count_simplex, int) and isinstance(count_duplex, int)
         count = 0
         if isinstance(count_simplex, int):
             count += count_simplex
@@ -385,6 +396,10 @@ class HemsEchonetClient:
             can_set_range=(0xBB in set_map),
             ignore_reported_start=True,
         )
+        energy_by_ch = self._limit_0287_list_items(energy_by_ch, count_simplex)
+        current_by_ch = self._limit_0287_list_items(current_by_ch, count_simplex)
+        duplex_energy_by_ch = self._limit_0287_list_items(duplex_energy_by_ch, count_duplex)
+        duplex_current_by_ch = self._limit_0287_list_items(duplex_current_by_ch, count_duplex)
         energy_by_ch = self._merge_0287_channel_values(
             simplex_by_ch=energy_by_ch,
             duplex_by_ch=duplex_energy_by_ch,
@@ -404,7 +419,8 @@ class HemsEchonetClient:
         )
         if detected_max < start_channel:
             return []
-        if detected_max > max_channel:
+        # When both B1/B8 are available, keep strict channel count from metadata.
+        if not count_both_known and detected_max > max_channel:
             max_channel = min(detected_max, 41)
 
         virtual_get_map: list[str] = []
@@ -464,20 +480,35 @@ class HemsEchonetClient:
             raw = bytes.fromhex(token)
         except ValueError:
             return {}
-        if len(raw) < 2:
-            return {}
-        reported_start = raw[0]
-        reported_range = raw[1]
-        body = raw[2:]
         if item_size <= 0:
             return {}
-        count = min(reported_range, len(body) // item_size)
-        out: dict[int, str] = {}
-        for i in range(count):
-            channel = (i + 1) if ignore_reported_start else (reported_start + i)
-            chunk = body[i * item_size : (i + 1) * item_size]
-            out[channel] = chunk.hex().upper()
-        return out
+        # Normal format: [start][range][data...]. Some vendor devices return
+        # header-less payloads (data only). Pick the parse that yields more items.
+        candidates: list[dict[int, str]] = []
+
+        if len(raw) >= 2:
+            reported_start = raw[0]
+            reported_range = raw[1]
+            body = raw[2:]
+            count = min(reported_range, len(body) // item_size)
+            out_with_header: dict[int, str] = {}
+            for i in range(count):
+                channel = (i + 1) if ignore_reported_start else (reported_start + i)
+                chunk = body[i * item_size : (i + 1) * item_size]
+                out_with_header[channel] = chunk.hex().upper()
+            candidates.append(out_with_header)
+
+        # Header-less fallback: treat full payload as a pure item array.
+        count_raw = len(raw) // item_size
+        out_no_header: dict[int, str] = {}
+        for i in range(count_raw):
+            channel = i + 1
+            chunk = raw[i * item_size : (i + 1) * item_size]
+            out_no_header[channel] = chunk.hex().upper()
+        candidates.append(out_no_header)
+
+        best = max(candidates, key=lambda x: len(x))
+        return best
 
     async def _get_single_epc_value(
         self, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int, epc: int
@@ -567,6 +598,17 @@ class HemsEchonetClient:
             out[global_ch] = token
         return out
 
+    @staticmethod
+    def _limit_0287_list_items(values: dict[int, str], expected: int | None) -> dict[int, str]:
+        if not isinstance(expected, int) or expected <= 0:
+            return dict(values)
+        out: dict[int, str] = {}
+        for idx, key in enumerate(sorted(values.keys()), start=1):
+            if idx > expected:
+                break
+            out[key] = values[key]
+        return out
+
     async def _discover_hosts(self) -> list[str]:
         assert self._client is not None
         if self._host:
@@ -646,6 +688,13 @@ class HemsEchonetClient:
         get_map = sorted(set(instance.get(0x9F, []) or []))
         set_map = sorted(set(instance.get(0x9E, []) or []))
         return get_map, set_map
+
+    @classmethod
+    def _build_fetch_map(cls, eoj: str, get_map: list[int]) -> list[int]:
+        # 0x0287: channel 1..32 (0xD0..0xEF) are derived from list properties.
+        if cls._class_code_from_eoj(eoj) != "0287":
+            return list(get_map)
+        return [epc for epc in get_map if not (0xD0 <= epc <= 0xEF)]
 
     def _target_by_key(self, target_key: str) -> Target | None:
         for target in self._targets:
