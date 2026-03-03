@@ -345,6 +345,7 @@ class HemsEchonetClient:
             fetch_range=fetch_range,
             item_size=4,
             can_set_range=(0xB2 in set_map),
+            ignore_reported_start=True,
         )
         current_by_ch = await self._fetch_0287_simplex_list(
             host,
@@ -357,6 +358,7 @@ class HemsEchonetClient:
             fetch_range=fetch_range,
             item_size=4,
             can_set_range=(0xB4 in set_map),
+            ignore_reported_start=True,
         )
         duplex_energy_by_ch = await self._fetch_0287_duplex_energy_list(
             host,
@@ -368,6 +370,7 @@ class HemsEchonetClient:
             start_channel=start_channel,
             fetch_range=fetch_range,
             can_set_range=(0xB9 in set_map),
+            ignore_reported_start=True,
         )
         duplex_current_by_ch = await self._fetch_0287_simplex_list(
             host,
@@ -380,6 +383,7 @@ class HemsEchonetClient:
             fetch_range=fetch_range,
             item_size=4,
             can_set_range=(0xBB in set_map),
+            ignore_reported_start=True,
         )
         energy_by_ch = self._merge_0287_channel_values(
             simplex_by_ch=energy_by_ch,
@@ -437,6 +441,7 @@ class HemsEchonetClient:
         fetch_range: int,
         item_size: int,
         can_set_range: bool = True,
+        ignore_reported_start: bool = False,
     ) -> dict[int, str]:
         assert self._client is not None
         if can_set_range:
@@ -469,7 +474,7 @@ class HemsEchonetClient:
         count = min(reported_range, len(body) // item_size)
         out: dict[int, str] = {}
         for i in range(count):
-            channel = (i + 1) if not can_set_range else (reported_start + i)
+            channel = (i + 1) if ignore_reported_start else (reported_start + i)
             chunk = body[i * item_size : (i + 1) * item_size]
             out[channel] = chunk.hex().upper()
         return out
@@ -500,6 +505,7 @@ class HemsEchonetClient:
         start_channel: int,
         fetch_range: int,
         can_set_range: bool = True,
+        ignore_reported_start: bool = False,
     ) -> dict[int, str]:
         # BA item is 8 bytes: normal(4) + reverse(4). Use normal direction to keep D0-compatible shape.
         raw_items = await self._fetch_0287_simplex_list(
@@ -513,6 +519,7 @@ class HemsEchonetClient:
             fetch_range=fetch_range,
             item_size=8,
             can_set_range=can_set_range,
+            ignore_reported_start=ignore_reported_start,
         )
         out: dict[int, str] = {}
         for ch, token in raw_items.items():
