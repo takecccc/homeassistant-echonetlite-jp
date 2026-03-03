@@ -130,6 +130,10 @@ class HemsEchonetClient:
             try:
                 get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
                 payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
+                extra_get_map = await self._augment_0287_channels(
+                    target.host, gc, cc, ci, get_map, set_map, payload
+                )
+                merged_get_map = sorted(set(get_map + extra_get_map))
                 out[key] = {
                     "host": target.host,
                     "eoj": target.eoj,
@@ -139,7 +143,7 @@ class HemsEchonetClient:
                     "product_code": target.product_code,
                     "eoj_desc": target.eoj_desc,
                     "payload": payload,
-                    "get_map": [self._epc_to_key(epc) for epc in get_map],
+                    "get_map": [self._epc_to_key(epc) for epc in merged_get_map],
                     "set_map": [self._epc_to_key(epc) for epc in set_map],
                     "errors": payload.get("_errors", []),
                 }
@@ -177,15 +181,24 @@ class HemsEchonetClient:
             raise KeyError(f"target not found: {target_key}")
         epc = self._epc_from_key(epc_key)
         gc, cc, ci = self._parse_eoj(target.eoj)
-        get_map, _set_map = self._get_property_maps(target.host, gc, cc, ci)
-        if epc not in get_map:
-            raise ValueError(f"{self._epc_to_key(epc)} is not in get-map")
-        ok = await self._client.echonetMessage(target.host, gc, cc, ci, GET, [{"EPC": epc}])
-        if not ok:
-            raise TimeoutError(f"GET timeout: {target.host} {target.eoj} {self._epc_to_key(epc)}")
-        state = getattr(self._client, "_state", {})
-        instance = self._get_instance_state(state, target.host, gc, cc, ci)
-        return self._normalize_epc_value(instance.get(epc))
+        get_map, set_map = self._get_property_maps(target.host, gc, cc, ci)
+        if epc in get_map:
+            ok = await self._client.echonetMessage(target.host, gc, cc, ci, GET, [{"EPC": epc}])
+            if not ok:
+                raise TimeoutError(f"GET timeout: {target.host} {target.eoj} {self._epc_to_key(epc)}")
+            state = getattr(self._client, "_state", {})
+            instance = self._get_instance_state(state, target.host, gc, cc, ci)
+            return self._normalize_epc_value(instance.get(epc))
+
+        # Synthetic EPCs for 0x0287 channel 33+.
+        if self._class_code_from_eoj(target.eoj) == "0287" and 0xF0 <= epc <= 0xF8:
+            payload = await self._fetch_raw_payload(target.host, gc, cc, ci, get_map)
+            extra_get_map = await self._augment_0287_channels(
+                target.host, gc, cc, ci, get_map, set_map, payload
+            )
+            if epc in extra_get_map:
+                return payload.get(self._epc_to_key(epc))
+        raise ValueError(f"{self._epc_to_key(epc)} is not in get-map")
 
     async def async_set_epc(self, target_key: str, epc_key: str, edt_hex: str) -> Any:
         edt = self._parse_edt_hex(edt_hex)
@@ -227,7 +240,135 @@ class HemsEchonetClient:
             epc = self._epc_from_key(epc_key)
         except ValueError:
             return None
-        return self._mra.resolve_property(eoj, epc)
+        meta = self._mra.resolve_property(eoj, epc)
+        if isinstance(meta, dict):
+            return meta
+        # 0x0287 channel 33+ synthetic EPCs (0xF0-0xF8).
+        if self._class_code_from_eoj(eoj) == "0287" and 0xF0 <= epc <= 0xF8:
+            base = self._mra.resolve_property(eoj, 0xD0)
+            if not isinstance(base, dict):
+                return None
+            channel = 33 + (epc - 0xF0)
+            out = dict(base)
+            out["name"] = f"計測チャンネル{channel}"
+            out["short_name"] = f"measurementChannel{channel}"
+            return out
+        return None
+
+    async def _augment_0287_channels(
+        self,
+        host: str,
+        eoj_gc: int,
+        eoj_cc: int,
+        eoj_ci: int,
+        get_map: list[int],
+        set_map: list[int],
+        payload: dict[str, Any],
+    ) -> list[int]:
+        # Power distribution board metering: channel 33+ is retrieved via range list EPCs.
+        if eoj_gc != 0x02 or eoj_cc != 0x87:
+            return []
+        count = self._decode_uint(payload.get("0xB1"), 1)
+        if count is None or count <= 32:
+            return []
+        max_channel = min(count, 41)
+        if max_channel <= 32:
+            return []
+        start_channel = 33
+        fetch_range = max_channel - start_channel + 1
+        if fetch_range <= 0:
+            return []
+
+        energy_by_ch = await self._fetch_0287_simplex_list(
+            host,
+            eoj_gc,
+            eoj_cc,
+            eoj_ci,
+            get_map,
+            set_map,
+            range_epc=0xB2,
+            list_epc=0xB3,
+            start_channel=start_channel,
+            fetch_range=fetch_range,
+            item_size=4,
+        )
+        current_by_ch = await self._fetch_0287_simplex_list(
+            host,
+            eoj_gc,
+            eoj_cc,
+            eoj_ci,
+            get_map,
+            set_map,
+            range_epc=0xB4,
+            list_epc=0xB5,
+            start_channel=start_channel,
+            fetch_range=fetch_range,
+            item_size=4,
+        )
+
+        synthetic_get_map: list[int] = []
+        for ch in range(start_channel, max_channel + 1):
+            # Fallback to no-data values when one of list fetches is missing.
+            energy = energy_by_ch.get(ch, "FFFFFFFE")
+            current = current_by_ch.get(ch, "7FFE7FFE")
+            if len(energy) != 8:
+                energy = "FFFFFFFE"
+            if len(current) != 8:
+                current = "7FFE7FFE"
+            synthetic_epc = 0xF0 + (ch - 33)
+            payload[self._epc_to_key(synthetic_epc)] = f"{energy}{current}"
+            synthetic_get_map.append(synthetic_epc)
+        return synthetic_get_map
+
+    async def _fetch_0287_simplex_list(
+        self,
+        host: str,
+        eoj_gc: int,
+        eoj_cc: int,
+        eoj_ci: int,
+        get_map: list[int],
+        set_map: list[int],
+        *,
+        range_epc: int,
+        list_epc: int,
+        start_channel: int,
+        fetch_range: int,
+        item_size: int,
+    ) -> dict[int, str]:
+        assert self._client is not None
+        if list_epc not in get_map or range_epc not in set_map:
+            return {}
+        edt = bytes([start_channel & 0xFF, fetch_range & 0xFF])
+        set_opc = [{"EPC": range_epc, "PDC": len(edt), "EDT": int.from_bytes(edt, "big")}]
+        ok = await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, SETC, set_opc)
+        if not ok:
+            return {}
+        ok = await self._client.echonetMessage(host, eoj_gc, eoj_cc, eoj_ci, GET, [{"EPC": list_epc}])
+        if not ok:
+            return {}
+        state = getattr(self._client, "_state", {})
+        instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
+        token = self._normalize_hex_token(instance.get(list_epc))
+        if not token:
+            return {}
+        try:
+            raw = bytes.fromhex(token)
+        except ValueError:
+            return {}
+        if len(raw) < 2:
+            return {}
+        reported_start = raw[0]
+        reported_range = raw[1]
+        body = raw[2:]
+        if item_size <= 0:
+            return {}
+        count = min(reported_range, len(body) // item_size)
+        out: dict[int, str] = {}
+        for i in range(count):
+            channel = reported_start + i
+            chunk = body[i * item_size : (i + 1) * item_size]
+            out[channel] = chunk.hex().upper()
+        return out
 
     async def _discover_hosts(self) -> list[str]:
         assert self._client is not None
@@ -336,10 +477,50 @@ class HemsEchonetClient:
         return f"0x{int(epc):02X}"
 
     @staticmethod
+    def _class_code_from_eoj(eoj: str) -> str:
+        raw = eoj.strip().upper().removeprefix("0X")
+        if len(raw) < 4:
+            return ""
+        return raw[:4]
+
+    @staticmethod
     def _normalize_epc_value(value: Any) -> Any:
         if isinstance(value, (bytes, bytearray)):
             return value.hex().upper()
         return value
+
+    @staticmethod
+    def _normalize_hex_token(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "01" if value else "00"
+        if isinstance(value, int):
+            return f"{value:02X}"
+        token = str(value).strip().upper()
+        if token.startswith("0X"):
+            token = token[2:]
+        token = token.replace(" ", "")
+        if not token:
+            return ""
+        if len(token) % 2 != 0:
+            token = f"0{token}"
+        if not all(ch in "0123456789ABCDEF" for ch in token):
+            return ""
+        return token
+
+    @classmethod
+    def _decode_uint(cls, value: Any, size: int) -> int | None:
+        token = cls._normalize_hex_token(value)
+        if not token:
+            return None
+        try:
+            raw = bytes.fromhex(token)
+        except ValueError:
+            return None
+        if len(raw) != size:
+            return None
+        return int.from_bytes(raw, byteorder="big", signed=False)
 
     @staticmethod
     def _parse_edt_hex(raw: str) -> bytes:
