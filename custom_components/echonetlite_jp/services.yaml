@@ -8,7 +8,7 @@ get_epc:
 
 set_epc:
   name: Set EPC (hex EDT)
-  description: Set EPC value with EDT hex string (example: 30, 3132, 0x30).
+  description: "Set EPC value with EDT hex string (example: 30, 3132, 0x30)."
   target:
     entity:
       integration: echonetlite_jp
