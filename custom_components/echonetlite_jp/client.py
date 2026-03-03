@@ -268,8 +268,13 @@ class HemsEchonetClient:
         # Power distribution board metering: channel 33+ is retrieved via range list EPCs.
         if eoj_gc != 0x02 or eoj_cc != 0x87:
             return []
-        count = self._decode_uint(payload.get("0xB1"), 1)
-        if count is None or count <= 32:
+        count_simplex = self._decode_channel_count(payload.get("0xB1"))
+        count_duplex = self._decode_channel_count(payload.get("0xB8"))
+        candidates = [c for c in (count_simplex, count_duplex) if isinstance(c, int)]
+        if not candidates:
+            return []
+        count = max(candidates)
+        if count <= 32:
             return []
         max_channel = min(count, 41)
         if max_channel <= 32:
@@ -285,7 +290,6 @@ class HemsEchonetClient:
             eoj_cc,
             eoj_ci,
             get_map,
-            set_map,
             range_epc=0xB2,
             list_epc=0xB3,
             start_channel=start_channel,
@@ -298,7 +302,6 @@ class HemsEchonetClient:
             eoj_cc,
             eoj_ci,
             get_map,
-            set_map,
             range_epc=0xB4,
             list_epc=0xB5,
             start_channel=start_channel,
@@ -327,7 +330,6 @@ class HemsEchonetClient:
         eoj_cc: int,
         eoj_ci: int,
         get_map: list[int],
-        set_map: list[int],
         *,
         range_epc: int,
         list_epc: int,
@@ -336,7 +338,7 @@ class HemsEchonetClient:
         item_size: int,
     ) -> dict[int, str]:
         assert self._client is not None
-        if list_epc not in get_map or range_epc not in set_map:
+        if list_epc not in get_map:
             return {}
         edt = bytes([start_channel & 0xFF, fetch_range & 0xFF])
         set_opc = [{"EPC": range_epc, "PDC": len(edt), "EDT": int.from_bytes(edt, "big")}]
@@ -521,6 +523,16 @@ class HemsEchonetClient:
         if len(raw) != size:
             return None
         return int.from_bytes(raw, byteorder="big", signed=False)
+
+    @classmethod
+    def _decode_channel_count(cls, value: Any) -> int | None:
+        count = cls._decode_uint(value, 1)
+        if count is None:
+            return None
+        # Undefined code in MRA: 0xFD.
+        if count == 0xFD:
+            return None
+        return count
 
     @staticmethod
     def _parse_edt_hex(raw: str) -> bytes:
