@@ -173,6 +173,7 @@ class MRAClassResolver:
             "minimum": None,
             "maximum": None,
             "base": None,
+            "coefficient": [],
             "enum": {},
             "no_data_codes": [],
             "object_fields": [],
@@ -210,6 +211,11 @@ class MRAClassResolver:
             info["unit"] = schema.get("unit")
         if "multiple" in schema and isinstance(schema.get("multiple"), (int, float)):
             info["multiple"] = schema.get("multiple")
+        if info["multiple"] is None and isinstance(schema.get("multipleOf"), (int, float)):
+            info["multiple"] = schema.get("multipleOf")
+        coefficient = schema.get("coefficient")
+        if isinstance(coefficient, list):
+            info["coefficient"] = [str(x) for x in coefficient if isinstance(x, str)]
         if "minimum" in schema and isinstance(schema.get("minimum"), (int, float)):
             info["minimum"] = schema.get("minimum")
         if "maximum" in schema and isinstance(schema.get("maximum"), (int, float)):
@@ -284,7 +290,17 @@ class MRAClassResolver:
             if key and key in self._definitions:
                 resolved = self._definitions[key]
                 if isinstance(resolved, dict):
-                    return resolved
+                    # Keep attributes declared beside $ref
+                    # (e.g. coefficient/multiple overrides in oneOf items).
+                    merged = dict(resolved)
+                    for k, v in node.items():
+                        if k == "$ref":
+                            continue
+                        if isinstance(merged.get(k), dict) and isinstance(v, dict):
+                            merged[k] = dict(merged[k]) | v
+                        else:
+                            merged[k] = v
+                    return merged
         if "oneOf" in node and isinstance(node["oneOf"], list):
             for candidate in node["oneOf"]:
                 resolved = self._resolve_schema(candidate)
