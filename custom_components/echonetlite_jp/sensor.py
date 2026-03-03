@@ -390,7 +390,7 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
             coef = _coefficient_factor(payload_map, meta.get("coefficient"))
             if coef is not None:
                 number = float(number) * coef
-            if not _in_numeric_range(number, meta):
+            if not _in_numeric_range(number, meta, payload_map, meta.get("coefficient")):
                 return None
             if isinstance(number, float):
                 number = round(number, 6)
@@ -893,7 +893,9 @@ def _is_energy_total(unit: str | None, name: str) -> bool:
     return ("積算" in name) or ("cumulative" in lowered)
 
 
-def _in_numeric_range(value: float | int, meta: dict[str, Any]) -> bool:
+def _in_numeric_range(
+    value: float | int, meta: dict[str, Any], payload: dict[str, Any] | None = None, refs: Any = None
+) -> bool:
     minimum = meta.get("minimum")
     maximum = meta.get("maximum")
     multiple = meta.get("multiple")
@@ -903,6 +905,11 @@ def _in_numeric_range(value: float | int, meta: dict[str, Any]) -> bool:
     if isinstance(multiple, (int, float)):
         lo = lo * float(multiple) if lo is not None else None
         hi = hi * float(multiple) if hi is not None else None
+    if isinstance(payload, dict):
+        coef = _coefficient_factor(payload, refs)
+        if coef is not None:
+            lo = lo * coef if lo is not None else None
+            hi = hi * coef if hi is not None else None
 
     fv = float(value)
     if lo is not None and fv < lo:
