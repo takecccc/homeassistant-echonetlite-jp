@@ -95,7 +95,7 @@ class HemsEchonetEpcNumber(CoordinatorEntity[HemsEchonetCoordinator], NumberEnti
             p for p in (manufacturer, device_name, f"{eoj_desc} ({eoj})" if eoj_desc else eoj) if p
         ]
         base = " ".join(base_parts) if base_parts else f"ECHONET {eoj}"
-        return f"{base} {prop_name or self._epc_key}"
+        return f"{base} {prop_name or '設定値'}"
 
     @property
     def available(self) -> bool:

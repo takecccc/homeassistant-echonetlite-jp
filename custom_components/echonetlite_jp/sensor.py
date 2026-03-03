@@ -104,34 +104,7 @@ async def async_setup_entry(
             eoj = str(data.get("eoj") or "").strip()
             if not eoj:
                 continue
-            payload = data.get("payload", {})
-            get_map = data.get("get_map", [])
-            set_map = data.get("set_map", [])
-            if not isinstance(payload, dict):
-                payload = {}
-            for epc_key in payload.keys():
-                if isinstance(epc_key, str):
-                    normalized = _normalize_property_key(epc_key)
-                    if normalized and should_register_epc(
-                        coordinator.client, eoj, normalized, filter_options
-                    ):
-                        meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, normalized)
-                        fields = _composite_field_specs(normalized, meta)
-                        if fields:
-                            for field in fields:
-                                pairs.append((target_key, normalized, field["key"]))
-                        else:
-                            pairs.append((target_key, normalized, "base"))
-            for epc_key in _property_keys_from_map(get_map):
-                if should_register_epc(coordinator.client, eoj, epc_key, filter_options):
-                    meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
-                    fields = _composite_field_specs(epc_key, meta)
-                    if fields:
-                        for field in fields:
-                            pairs.append((target_key, epc_key, field["key"]))
-                    else:
-                        pairs.append((target_key, epc_key, "base"))
-            for epc_key in _property_keys_from_map(set_map):
+            for epc_key in coordinator.client.list_sensor_property_keys(data):
                 if should_register_epc(coordinator.client, eoj, epc_key, filter_options):
                     meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
                     fields = _composite_field_specs(epc_key, meta)
@@ -189,7 +162,7 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
             p for p in (manufacturer, device_name, f"{eoj_desc} ({eoj})" if eoj_desc else eoj) if p
         ]
         base = " ".join(base_parts) if base_parts else f"ECHONET {eoj}"
-        suffix = prop_name if prop_name else self._epc_key
+        suffix = prop_name if prop_name else "計測値"
         return f"{base} {suffix}"
 
     @property
@@ -470,7 +443,7 @@ class HemsEchonetCompositeFieldSensor(CoordinatorEntity[HemsEchonetCoordinator],
         ]
         base = " ".join(base_parts) if base_parts else f"ECHONET {eoj}"
         field = _composite_field_info(self._epc_key, meta, self._field_key)
-        prop_name = str(meta.get("name") or self._epc_key).strip()
+        prop_name = str(meta.get("name") or "").strip() or "計測値"
         field_name = str(field.get("name") or self._field_key)
         return f"{base} {prop_name} {field_name}"
 

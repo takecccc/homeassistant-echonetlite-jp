@@ -33,7 +33,7 @@ async def test_augment_0287_channels_simplex(client: HemsEchonetClient, monkeypa
         list_epc = kwargs["list_epc"]
         if list_epc == 0xB3:
             return {33: "00000064", 34: "00000065", 35: "00000066"}
-        if list_epc == 0xB5:
+        if list_epc == 0xB7:
             return {33: "000A000B", 34: "000C000D", 35: "000E000F"}
         return {}
 
@@ -49,8 +49,8 @@ async def test_augment_0287_channels_simplex(client: HemsEchonetClient, monkeypa
         eoj_gc=0x02,
         eoj_cc=0x87,
         eoj_ci=0x01,
-        get_map=[0xB3, 0xB5],
-        set_map=[0xB2, 0xB4],
+        get_map=[0xB3, 0xB7],
+        set_map=[0xB2, 0xB6],
         payload=payload,
     )
 
@@ -64,7 +64,7 @@ async def test_augment_0287_channels_simplex(client: HemsEchonetClient, monkeypa
 async def test_augment_0287_channels_duplex_fallback(client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_simplex(*args, **kwargs):
         list_epc = kwargs["list_epc"]
-        if list_epc == 0xBC:
+        if list_epc == 0xBE:
             return {33: "00100020", 34: "00300040"}
         return {}
 
@@ -80,8 +80,8 @@ async def test_augment_0287_channels_duplex_fallback(client: HemsEchonetClient, 
         eoj_gc=0x02,
         eoj_cc=0x87,
         eoj_ci=0x01,
-        get_map=[0xBA, 0xBC],
-        set_map=[0xB9, 0xBB],
+        get_map=[0xBA, 0xBE],
+        set_map=[0xB9, 0xBD],
         payload=payload,
     )
 
@@ -133,9 +133,9 @@ async def test_augment_0287_channels_merges_simplex_and_duplex_when_set_not_supp
         list_epc = kwargs["list_epc"]
         if list_epc == 0xB3:
             return {33: "000000A1", 34: "000000A2", 35: "000000A3", 36: "000000A4"}
-        if list_epc == 0xB5:
+        if list_epc == 0xB7:
             return {33: "00110012", 34: "00130014", 35: "00150016", 36: "00170018"}
-        if list_epc == 0xBC:
+        if list_epc == 0xBE:
             # Duplex local channel 1
             return {1: "00210022"}
         return {}
@@ -156,7 +156,7 @@ async def test_augment_0287_channels_merges_simplex_and_duplex_when_set_not_supp
         eoj_gc=0x02,
         eoj_cc=0x87,
         eoj_ci=0x01,
-        get_map=[0xB3, 0xB5, 0xBA, 0xBC],
+        get_map=[0xB3, 0xB7, 0xBA, 0xBE],
         set_map=[],
         payload=payload,
     )
@@ -187,7 +187,7 @@ async def test_augment_0287_channels_extends_max_from_detected_duplex_data(
                 38: "00000016",
                 39: "00000017",
             }
-        if list_epc == 0xB5:
+        if list_epc == 0xB7:
             return {
                 33: "00110012",
                 34: "00130014",
@@ -197,7 +197,7 @@ async def test_augment_0287_channels_extends_max_from_detected_duplex_data(
                 38: "001B001C",
                 39: "001D001E",
             }
-        if list_epc == 0xBC:
+        if list_epc == 0xBE:
             # Duplex local channel 1
             return {1: "00210022"}
         return {}
@@ -222,7 +222,7 @@ async def test_augment_0287_channels_extends_max_from_detected_duplex_data(
         eoj_gc=0x02,
         eoj_cc=0x87,
         eoj_ci=0x01,
-        get_map=[0xB3, 0xB5, 0xBA, 0xBC],
+        get_map=[0xB3, 0xB7, 0xBA, 0xBE],
         set_map=[],
         payload=payload,
     )
@@ -257,9 +257,9 @@ async def test_augment_0287_channels_prefers_list_for_channel_1_to_32(
         list_epc = kwargs["list_epc"]
         if list_epc == 0xB3:
             return {1: "000000AA"}
-        if list_epc == 0xB5:
+        if list_epc == 0xB7:
             return {1: "00010002"}
-        if list_epc == 0xBC:
+        if list_epc == 0xBE:
             return {}
         return {}
 
@@ -278,7 +278,7 @@ async def test_augment_0287_channels_prefers_list_for_channel_1_to_32(
         eoj_gc=0x02,
         eoj_cc=0x87,
         eoj_ci=0x01,
-        get_map=[0xB3, 0xB5, 0xD0],
+        get_map=[0xB3, 0xB7, 0xD0],
         set_map=[],
         payload=payload,
     )
@@ -326,9 +326,9 @@ async def test_augment_0287_channels_respects_b1_b8_item_counts(
         if list_epc == 0xB3:
             # more items than B1
             return {1: "00000011", 2: "00000012", 3: "00000013"}
-        if list_epc == 0xB5:
+        if list_epc == 0xB7:
             return {1: "00110012", 2: "00130014", 3: "00150016"}
-        if list_epc == 0xBC:
+        if list_epc == 0xBE:
             # more items than B8
             return {1: "00210022", 2: "00230024"}
         return {}
@@ -348,7 +348,7 @@ async def test_augment_0287_channels_respects_b1_b8_item_counts(
         eoj_gc=0x02,
         eoj_cc=0x87,
         eoj_ci=0x01,
-        get_map=[0xB3, 0xB5, 0xBA, 0xBC],
+        get_map=[0xB3, 0xB7, 0xBA, 0xBE],
         set_map=[],
         payload=payload,
     )

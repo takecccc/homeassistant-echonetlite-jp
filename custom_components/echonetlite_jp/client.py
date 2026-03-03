@@ -15,9 +15,11 @@ from pychonet.lib.const import GET
 from pychonet.lib.const import SETC
 from pychonet.lib.udpserver import UDPServer
 
+from .device_classes import Eoj0287Handler
 from .mra import MRAClassResolver
 
 _VIRTUAL_0287_RE = re.compile(r"^v0287_ch([3-4][0-9])$")
+_EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
 
 
 class _ManagedUDPServer(UDPServer):
@@ -89,6 +91,9 @@ class HemsEchonetClient:
         self._rediscover_on_error = rediscover_on_error
         self._debug = debug
         self._mra = MRAClassResolver(mra_dir)
+        self._class_handlers: dict[str, Any] = {
+            Eoj0287Handler.CLASS_CODE: Eoj0287Handler(),
+        }
 
         self._udp: _ManagedUDPServer | None = None
         self._client: ECHONETAPIClient | None = None
@@ -286,20 +291,25 @@ class HemsEchonetClient:
             return None
         return self.resolve_epc_metadata_by_eoj(target.eoj, epc_key)
 
+    def list_sensor_property_keys(self, data: dict[str, Any]) -> list[str]:
+        eoj = str(data.get("eoj") or "").strip()
+        class_code = self._class_code_from_eoj(eoj)
+        handler = self._class_handlers.get(class_code)
+        if handler is not None and hasattr(handler, "build_sensor_keys"):
+            return handler.build_sensor_keys(self, data)
+        return self._build_sensor_keys_default(data)
+
     def resolve_epc_metadata_by_eoj(self, eoj: str, epc_key: str) -> dict[str, Any] | None:
+        class_code = self._class_code_from_eoj(eoj)
+        handler = self._class_handlers.get(class_code)
+        if handler is not None and hasattr(handler, "resolve_epc_metadata"):
+            handled = handler.resolve_epc_metadata(self, epc_key)
+            if handled is not None:
+                return handled
         try:
             epc = self._epc_from_key(epc_key)
         except ValueError:
-            channel = self._virtual_0287_channel(epc_key)
-            if self._class_code_from_eoj(eoj) != "0287" or channel is None:
-                return None
-            base = self._mra.resolve_property(eoj, 0xD0)
-            if not isinstance(base, dict):
-                return None
-            out = dict(base)
-            out["name"] = f"計測チャンネル{channel}"
-            out["short_name"] = f"measurementChannel{channel}"
-            return out
+            return None
         meta = self._mra.resolve_property(eoj, epc)
         if isinstance(meta, dict):
             return meta
@@ -315,138 +325,89 @@ class HemsEchonetClient:
         set_map: list[int],
         payload: dict[str, Any],
     ) -> list[str]:
-        # Power distribution board metering: channel 33+ is retrieved via range list EPCs.
-        if eoj_gc != 0x02 or eoj_cc != 0x87:
+        handler = self._class_handlers.get("0287")
+        if handler is None:
             return []
-        # Some devices don't expose B1/B8 in get-map although direct GET works.
-        b1 = payload.get("0xB1")
-        if b1 is None:
-            b1 = await self._get_single_epc_value(host, eoj_gc, eoj_cc, eoj_ci, 0xB1)
-            if b1 is not None:
-                payload["0xB1"] = b1
-        b8 = payload.get("0xB8")
-        if b8 is None:
-            b8 = await self._get_single_epc_value(host, eoj_gc, eoj_cc, eoj_ci, 0xB8)
-            if b8 is not None:
-                payload["0xB8"] = b8
+        return await handler.augment_channels(
+            self, host, eoj_gc, eoj_cc, eoj_ci, get_map, set_map, payload
+        )
 
-        count_simplex = self._decode_channel_count(b1)
-        count_duplex = self._decode_channel_count(b8)
-        count_both_known = isinstance(count_simplex, int) and isinstance(count_duplex, int)
-        has_count_info = isinstance(count_simplex, int) or isinstance(count_duplex, int)
-        count = 0
-        if isinstance(count_simplex, int):
-            count += count_simplex
-        if isinstance(count_duplex, int):
-            count += count_duplex
-        if count <= 0:
-            # Unknown count: still try list acquisition and infer target channel span.
-            count = 41
-        max_channel = min(count, 41)
-        start_channel = 1
-        fetch_range = max(1, max_channel - start_channel + 1)
+    @staticmethod
+    def _build_0287_channel_meta(channel: int) -> dict[str, Any]:
+        return Eoj0287Handler().build_channel_meta(channel)
 
-        energy_by_ch = await self._fetch_0287_simplex_list(
+    async def _obtain_0287_simplex_list(
+        self,
+        host: str,
+        eoj_gc: int,
+        eoj_cc: int,
+        eoj_ci: int,
+        *,
+        range_epc: int,
+        list_epc: int,
+        start_channel: int,
+        fetch_range: int,
+        item_size: int,
+        can_set_range: bool,
+        ignore_reported_start: bool,
+        cached_value: Any,
+    ) -> dict[int, str]:
+        parsed_cached = self._decode_0287_list_payload(
+            cached_value, item_size=item_size, ignore_reported_start=ignore_reported_start
+        )
+        if parsed_cached:
+            return parsed_cached
+        return await self._fetch_0287_simplex_list(
             host,
             eoj_gc,
             eoj_cc,
             eoj_ci,
-            range_epc=0xB2,
-            list_epc=0xB3,
+            range_epc=range_epc,
+            list_epc=list_epc,
             start_channel=start_channel,
             fetch_range=fetch_range,
-            item_size=4,
-            can_set_range=(0xB2 in set_map),
-            ignore_reported_start=True,
-        )
-        current_by_ch = await self._fetch_0287_simplex_list(
-            host,
-            eoj_gc,
-            eoj_cc,
-            eoj_ci,
-            range_epc=0xB4,
-            list_epc=0xB5,
-            start_channel=start_channel,
-            fetch_range=fetch_range,
-            item_size=4,
-            can_set_range=(0xB4 in set_map),
-            ignore_reported_start=True,
-        )
-        duplex_energy_by_ch = await self._fetch_0287_duplex_energy_list(
-            host,
-            eoj_gc,
-            eoj_cc,
-            eoj_ci,
-            range_epc=0xB9,
-            list_epc=0xBA,
-            start_channel=start_channel,
-            fetch_range=fetch_range,
-            can_set_range=(0xB9 in set_map),
-            ignore_reported_start=True,
-        )
-        duplex_current_by_ch = await self._fetch_0287_simplex_list(
-            host,
-            eoj_gc,
-            eoj_cc,
-            eoj_ci,
-            range_epc=0xBB,
-            list_epc=0xBC,
-            start_channel=start_channel,
-            fetch_range=fetch_range,
-            item_size=4,
-            can_set_range=(0xBB in set_map),
-            ignore_reported_start=True,
-        )
-        energy_by_ch = self._limit_0287_list_items(energy_by_ch, count_simplex)
-        current_by_ch = self._limit_0287_list_items(current_by_ch, count_simplex)
-        duplex_energy_by_ch = self._limit_0287_list_items(duplex_energy_by_ch, count_duplex)
-        duplex_current_by_ch = self._limit_0287_list_items(duplex_current_by_ch, count_duplex)
-        energy_by_ch = self._merge_0287_channel_values(
-            simplex_by_ch=energy_by_ch,
-            duplex_by_ch=duplex_energy_by_ch,
-            count_simplex=count_simplex,
-            count_duplex=count_duplex,
-        )
-        current_by_ch = self._merge_0287_channel_values(
-            simplex_by_ch=current_by_ch,
-            duplex_by_ch=duplex_current_by_ch,
-            count_simplex=count_simplex,
-            count_duplex=count_duplex,
+            item_size=item_size,
+            can_set_range=can_set_range,
+            ignore_reported_start=ignore_reported_start,
         )
 
-        detected_max = max(
-            max(energy_by_ch.keys(), default=0),
-            max(current_by_ch.keys(), default=0),
+    async def _obtain_0287_duplex_energy_list(
+        self,
+        host: str,
+        eoj_gc: int,
+        eoj_cc: int,
+        eoj_ci: int,
+        *,
+        range_epc: int,
+        list_epc: int,
+        start_channel: int,
+        fetch_range: int,
+        can_set_range: bool,
+        ignore_reported_start: bool,
+        cached_value: Any,
+    ) -> dict[int, str]:
+        parsed_cached = self._decode_0287_list_payload(
+            cached_value, item_size=8, ignore_reported_start=ignore_reported_start
         )
-        if detected_max < start_channel:
-            if has_count_info and count > 0:
-                detected_max = max_channel
-            else:
-                return []
-        # When both B1/B8 are available, keep strict channel count from metadata.
-        if not count_both_known and detected_max > max_channel:
-            max_channel = min(detected_max, 41)
-
-        virtual_get_map: list[str] = []
-        for ch in range(start_channel, max_channel + 1):
-            # Fallback to no-data values when one of list fetches is missing.
-            energy = energy_by_ch.get(ch, "FFFFFFFE")
-            current = current_by_ch.get(ch, "7FFE7FFE")
-            if len(energy) != 8:
-                energy = "FFFFFFFE"
-            if len(current) != 8:
-                current = "7FFE7FFE"
-            composite = f"{energy}{current}"
-            # 1..32: keep standard EPCs (0xD0..0xEF), but prioritize list-derived values.
-            if 1 <= ch <= 32:
-                epc = 0xD0 + (ch - 1)
-                payload[self._epc_to_key(epc)] = composite
-                continue
-            # 33+: exposed as virtual channels.
-            key = self._virtual_0287_key(ch)
-            payload[key] = composite
-            virtual_get_map.append(key)
-        return virtual_get_map
+        if parsed_cached:
+            out: dict[int, str] = {}
+            for ch, token in parsed_cached.items():
+                if len(token) >= 8:
+                    out[ch] = token[:8]
+            if out:
+                return out
+        return await self._fetch_0287_duplex_energy_list(
+            host,
+            eoj_gc,
+            eoj_cc,
+            eoj_ci,
+            range_epc=range_epc,
+            list_epc=list_epc,
+            start_channel=start_channel,
+            fetch_range=fetch_range,
+            can_set_range=can_set_range,
+            ignore_reported_start=ignore_reported_start,
+        )
 
     async def _fetch_0287_simplex_list(
         self,
@@ -478,47 +439,9 @@ class HemsEchonetClient:
         state = getattr(self._client, "_state", {})
         instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
         value = instance.get(list_epc)
-        structured = self._parse_0287_list_value(
+        return self._decode_0287_list_payload(
             value, item_size=item_size, ignore_reported_start=ignore_reported_start
         )
-        if structured:
-            return structured
-        token = self._normalize_hex_token(value)
-        if not token:
-            return {}
-        try:
-            raw = bytes.fromhex(token)
-        except ValueError:
-            return {}
-        if item_size <= 0:
-            return {}
-        # Normal format: [start][range][data...]. Some vendor devices return
-        # header-less payloads (data only). Pick the parse that yields more items.
-        candidates: list[dict[int, str]] = []
-
-        if len(raw) >= 2:
-            reported_start = raw[0]
-            reported_range = raw[1]
-            body = raw[2:]
-            count = min(reported_range, len(body) // item_size)
-            out_with_header: dict[int, str] = {}
-            for i in range(count):
-                channel = (i + 1) if ignore_reported_start else (reported_start + i)
-                chunk = body[i * item_size : (i + 1) * item_size]
-                out_with_header[channel] = chunk.hex().upper()
-            candidates.append(out_with_header)
-
-        # Header-less fallback: treat full payload as a pure item array.
-        count_raw = len(raw) // item_size
-        out_no_header: dict[int, str] = {}
-        for i in range(count_raw):
-            channel = i + 1
-            chunk = raw[i * item_size : (i + 1) * item_size]
-            out_no_header[channel] = chunk.hex().upper()
-        candidates.append(out_no_header)
-
-        best = max(candidates, key=lambda x: len(x))
-        return best
 
     async def _get_single_epc_value(
         self, host: str, eoj_gc: int, eoj_cc: int, eoj_ci: int, epc: int
@@ -663,6 +586,49 @@ class HemsEchonetClient:
         return out
 
     @classmethod
+    def _decode_0287_list_payload(
+        cls, value: Any, *, item_size: int, ignore_reported_start: bool
+    ) -> dict[int, str]:
+        structured = cls._parse_0287_list_value(
+            value, item_size=item_size, ignore_reported_start=ignore_reported_start
+        )
+        if structured:
+            return structured
+
+        token = cls._normalize_hex_token(value)
+        if not token:
+            return {}
+        try:
+            raw = bytes.fromhex(token)
+        except ValueError:
+            return {}
+        if item_size <= 0:
+            return {}
+
+        candidates: list[dict[int, str]] = []
+        if len(raw) >= 2:
+            reported_start = raw[0]
+            reported_range = raw[1]
+            body = raw[2:]
+            count = min(reported_range, len(body) // item_size)
+            out_with_header: dict[int, str] = {}
+            for i in range(count):
+                channel = (i + 1) if ignore_reported_start else (reported_start + i)
+                chunk = body[i * item_size : (i + 1) * item_size]
+                out_with_header[channel] = chunk.hex().upper()
+            candidates.append(out_with_header)
+
+        count_raw = len(raw) // item_size
+        out_no_header: dict[int, str] = {}
+        for i in range(count_raw):
+            channel = i + 1
+            chunk = raw[i * item_size : (i + 1) * item_size]
+            out_no_header[channel] = chunk.hex().upper()
+        candidates.append(out_no_header)
+
+        return max(candidates, key=lambda x: len(x))
+
+    @classmethod
     def _to_fixed_hex(cls, value: Any, size: int) -> str:
         width = int(size) * 2
         if width <= 0:
@@ -763,12 +729,30 @@ class HemsEchonetClient:
         set_map = sorted(set(instance.get(0x9E, []) or []))
         return get_map, set_map
 
+    def _build_sensor_keys_default(self, data: dict[str, Any]) -> list[str]:
+        keys: set[str] = set()
+        keys.update(self._property_keys_from_list(data.get("get_map", [])))
+        keys.update(self._property_keys_from_list(data.get("set_map", [])))
+        payload = data.get("payload", {})
+        if isinstance(payload, dict):
+            for key in payload.keys():
+                normalized = self._normalize_property_key(key)
+                if normalized:
+                    keys.add(normalized)
+        return sorted(keys)
+
+    def _build_sensor_keys_0287(self, data: dict[str, Any]) -> list[str]:
+        handler = self._class_handlers.get("0287")
+        if handler is None:
+            return self._build_sensor_keys_default(data)
+        return handler.build_sensor_keys(self, data)
+
     @classmethod
     def _build_fetch_map(cls, eoj: str, get_map: list[int]) -> list[int]:
         # 0x0287: channel 1..32 (0xD0..0xEF) are derived from list properties.
         if cls._class_code_from_eoj(eoj) != "0287":
             return list(get_map)
-        return [epc for epc in get_map if not (0xD0 <= epc <= 0xEF)]
+        return Eoj0287Handler().build_fetch_map(get_map)
 
     def _target_by_key(self, target_key: str) -> Target | None:
         for target in self._targets:
@@ -820,6 +804,43 @@ class HemsEchonetClient:
         if len(raw) < 4:
             return ""
         return raw[:4]
+
+    @classmethod
+    def _property_keys_from_list(cls, values: Any) -> list[str]:
+        out: list[str] = []
+        if not isinstance(values, list):
+            return out
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            normalized = cls._normalize_property_key(value)
+            if normalized:
+                out.append(normalized)
+        return out
+
+    @classmethod
+    def _normalize_property_key(cls, value: str) -> str | None:
+        raw = value.strip()
+        if _EPC_KEY_RE.fullmatch(raw):
+            try:
+                epc = int(raw, 16)
+            except ValueError:
+                return None
+            return f"0x{epc:02X}"
+        if cls._virtual_0287_channel(raw) is not None:
+            return raw.lower()
+        return None
+
+    @classmethod
+    def _sensor_key_sort(cls, key: str) -> tuple[int, int, str]:
+        channel = cls._virtual_0287_channel(key)
+        if channel is not None:
+            return (2, channel, key)
+        try:
+            epc = cls._epc_from_key(key)
+        except ValueError:
+            return (3, 0, key)
+        return (1, epc, key)
 
     @staticmethod
     def _normalize_epc_value(value: Any) -> Any:
