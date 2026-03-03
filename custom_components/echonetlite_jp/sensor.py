@@ -685,10 +685,7 @@ def _decode_special_value(epc_key: str, raw_value: Any) -> str | None:
 
 def _apply_kwh_unit_from_payload(value: int, payload: dict[str, Any]) -> float:
     c2_raw = payload.get("0xC2")
-    token = _normalize_hex_token(c2_raw)
-    if not token:
-        return float(value)
-    coef = _KWH_UNIT_COEFFICIENT.get(token[-2:])
+    coef = _resolve_c2_multiplier(c2_raw)
     if coef is None:
         return float(value)
     return round(float(value) * coef, 6)
@@ -706,11 +703,11 @@ def _coefficient_factor(payload: dict[str, Any], refs: Any) -> float | None:
         if not epc:
             continue
         token = _normalize_hex_token(payload.get(epc))
-        if not token:
+        if not token and epc != "0xC2":
             continue
         used = True
         if epc == "0xC2":
-            c = _KWH_UNIT_COEFFICIENT.get(token[-2:])
+            c = _resolve_c2_multiplier(payload.get(epc))
             if c is not None:
                 factor *= c
             continue
@@ -721,6 +718,29 @@ def _coefficient_factor(payload: dict[str, Any], refs: Any) -> float | None:
     if not used:
         return None
     return factor
+
+
+def _resolve_c2_multiplier(value: Any) -> float | None:
+    token = _normalize_hex_token(value)
+    if token:
+        coef = _KWH_UNIT_COEFFICIENT.get(token[-2:])
+        if coef is not None:
+            return coef
+
+    # Some stacks may expose enum code as decimal text (e.g. "10" for 0x0A).
+    if isinstance(value, str):
+        s = value.strip()
+        if s.isdigit():
+            try:
+                code = int(s, 10)
+            except ValueError:
+                return None
+            if 0 <= code <= 0xFF:
+                return _KWH_UNIT_COEFFICIENT.get(f"{code:02X}")
+    if isinstance(value, int) and not isinstance(value, bool):
+        if 0 <= value <= 0xFF:
+            return _KWH_UNIT_COEFFICIENT.get(f"{value:02X}")
+    return None
 
 
 def _decode_temporal_value(raw_value: Any, value_type: str) -> str | None:

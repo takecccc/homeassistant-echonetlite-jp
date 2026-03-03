@@ -109,3 +109,31 @@ def test_c1_applies_c2_fractional_coefficient() -> None:
     assert sensor.device_class == SensorDeviceClass.ENERGY
     assert sensor.state_class == SensorStateClass.TOTAL_INCREASING
     assert sensor.native_value == 10.0
+
+
+def test_c0_applies_c2_when_code_is_decimal_string() -> None:
+    coordinator = _FakeCoordinator(
+        data={
+            "t": {
+                "eoj": "028701",
+                # C2 decimal string "10" should be interpreted as enum code 0x0A => x10
+                "payload": {"0xC0": "00000064", "0xC2": "10"},
+                "get_map": ["0xC0", "0xC2"],
+                "set_map": [],
+            }
+        },
+        meta={
+            "name": "積算電力量計測値 (正方向)",
+            "type": "number",
+            "unit": "kWh",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 99999999,
+            "multiple": 1,
+            "coefficient": ["0xC2"],
+            "no_data_codes": [0xFFFFFFFE],
+        },
+    )
+
+    sensor = HemsEchonetEpcSensor(coordinator, "t", "0xC0")
+    assert sensor.native_value == 1000.0
