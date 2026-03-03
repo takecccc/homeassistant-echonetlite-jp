@@ -167,6 +167,67 @@ async def test_augment_0287_channels_merges_simplex_and_duplex_when_set_not_supp
     assert payload["v0287_ch37"] == "000000B100210022"
 
 
+@pytest.mark.asyncio
+async def test_augment_0287_channels_extends_max_from_detected_duplex_data(
+    client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_simplex(*args, **kwargs):
+        list_epc = kwargs["list_epc"]
+        if list_epc == 0xB3:
+            # simplex ch33..39
+            return {
+                33: "00000011",
+                34: "00000012",
+                35: "00000013",
+                36: "00000014",
+                37: "00000015",
+                38: "00000016",
+                39: "00000017",
+            }
+        if list_epc == 0xB5:
+            return {
+                33: "00110012",
+                34: "00130014",
+                35: "00150016",
+                36: "00170018",
+                37: "0019001A",
+                38: "001B001C",
+                39: "001D001E",
+            }
+        if list_epc == 0xBC:
+            # Duplex local channel 1
+            return {1: "00210022"}
+        return {}
+
+    async def fake_duplex(*args, **kwargs):
+        # Duplex local channel 1
+        return {1: "00000021"}
+
+    async def fake_single(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(client, "_fetch_0287_simplex_list", fake_simplex)
+    monkeypatch.setattr(client, "_fetch_0287_duplex_energy_list", fake_duplex)
+    monkeypatch.setattr(client, "_get_single_epc_value", fake_single)
+
+    payload = {
+        "0xB1": "27",  # simplex=39
+        # B8 is unavailable on this device
+    }
+    extra = await client._augment_0287_channels(
+        host="127.0.0.1",
+        eoj_gc=0x02,
+        eoj_cc=0x87,
+        eoj_ci=0x01,
+        get_map=[0xB3, 0xB5, 0xBA, 0xBC],
+        set_map=[],
+        payload=payload,
+    )
+
+    assert "v0287_ch40" in extra
+    assert payload["v0287_ch40"] == "0000002100210022"
+
+
 def test_resolve_metadata_for_virtual_channel(client: HemsEchonetClient) -> None:
     meta = client.resolve_epc_metadata_by_eoj("028701", "v0287_ch33")
     assert isinstance(meta, dict)

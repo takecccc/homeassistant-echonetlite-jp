@@ -411,6 +411,13 @@ class HemsEchonetClient:
             count_duplex=count_duplex,
         )
 
+        detected_max = max(
+            max(energy_by_ch.keys(), default=0),
+            max(current_by_ch.keys(), default=0),
+        )
+        if detected_max > max_channel:
+            max_channel = min(detected_max, 41)
+
         virtual_get_map: list[str] = []
         for ch in range(start_channel, max_channel + 1):
             # Fallback to no-data values when one of list fetches is missing.
