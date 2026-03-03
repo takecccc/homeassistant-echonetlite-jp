@@ -91,17 +91,21 @@ async def test_augment_0287_channels_duplex_fallback(client: HemsEchonetClient, 
 
 
 @pytest.mark.asyncio
-async def test_augment_0287_channels_prefers_direct_f0_to_f8(
+async def test_augment_0287_channels_returns_empty_when_only_unknown_f0_data(
     client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fail_simplex(*args, **kwargs):
-        raise AssertionError("range list path must not be used when 0xF0.. is available")
+    async def fake_simplex(*args, **kwargs):
+        return {}
 
-    async def fail_duplex(*args, **kwargs):
-        raise AssertionError("range list path must not be used when 0xF0.. is available")
+    async def fake_duplex(*args, **kwargs):
+        return {}
 
-    monkeypatch.setattr(client, "_fetch_0287_simplex_list", fail_simplex)
-    monkeypatch.setattr(client, "_fetch_0287_duplex_energy_list", fail_duplex)
+    async def fake_single(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(client, "_fetch_0287_simplex_list", fake_simplex)
+    monkeypatch.setattr(client, "_fetch_0287_duplex_energy_list", fake_duplex)
+    monkeypatch.setattr(client, "_get_single_epc_value", fake_single)
 
     payload = {
         "0xF0": "00000064000A000B",
@@ -117,9 +121,8 @@ async def test_augment_0287_channels_prefers_direct_f0_to_f8(
         payload=payload,
     )
 
-    assert extra == ["v0287_ch33", "v0287_ch34"]
-    assert payload["v0287_ch33"] == "00000064000A000B"
-    assert payload["v0287_ch34"] == "00000065000C000D"
+    assert extra == []
+    assert "v0287_ch33" not in payload
 
 
 @pytest.mark.asyncio
@@ -233,3 +236,41 @@ def test_resolve_metadata_for_virtual_channel(client: HemsEchonetClient) -> None
     assert isinstance(meta, dict)
     assert meta["name"] == "計測チャンネル33"
     assert meta["short_name"] == "measurementChannel33"
+
+
+@pytest.mark.asyncio
+async def test_augment_0287_channels_prefers_list_for_channel_1_to_32(
+    client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_simplex(*args, **kwargs):
+        list_epc = kwargs["list_epc"]
+        if list_epc == 0xB3:
+            return {1: "000000AA"}
+        if list_epc == 0xB5:
+            return {1: "00010002"}
+        if list_epc == 0xBC:
+            return {}
+        return {}
+
+    async def fake_duplex(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(client, "_fetch_0287_simplex_list", fake_simplex)
+    monkeypatch.setattr(client, "_fetch_0287_duplex_energy_list", fake_duplex)
+
+    payload = {
+        "0xB1": "01",
+        "0xD0": "FFFFFFFFFFFFFFFF",  # should be overwritten by list-derived data
+    }
+    extra = await client._augment_0287_channels(
+        host="127.0.0.1",
+        eoj_gc=0x02,
+        eoj_cc=0x87,
+        eoj_ci=0x01,
+        get_map=[0xB3, 0xB5, 0xD0],
+        set_map=[],
+        payload=payload,
+    )
+
+    assert extra == []
+    assert payload["0xD0"] == "000000AA00010002"

@@ -308,13 +308,6 @@ class HemsEchonetClient:
         # Power distribution board metering: channel 33+ is retrieved via range list EPCs.
         if eoj_gc != 0x02 or eoj_cc != 0x87:
             return []
-        # Some vendor implementations expose channel 33+ directly on 0xF0..0xF8.
-        # If available, prefer direct GET values and map them to virtual keys.
-        direct_virtual = await self._map_0287_direct_epcs(
-            host, eoj_gc, eoj_cc, eoj_ci, get_map, payload
-        )
-        if direct_virtual:
-            return direct_virtual
         # Some devices don't expose B1/B8 in get-map although direct GET works.
         b1 = payload.get("0xB1")
         if b1 is None:
@@ -329,27 +322,17 @@ class HemsEchonetClient:
 
         count_simplex = self._decode_channel_count(b1)
         count_duplex = self._decode_channel_count(b8)
-        if count_simplex is None and count_duplex is None:
-            return []
         count = 0
         if isinstance(count_simplex, int):
             count += count_simplex
         if isinstance(count_duplex, int):
             count += count_duplex
         if count <= 0:
-            candidates = [c for c in (count_simplex, count_duplex) if isinstance(c, int)]
-            if not candidates:
-                return []
-            count = max(candidates)
-        if count <= 32:
-            return []
+            # Unknown count: still try list acquisition and infer target channel span.
+            count = 41
         max_channel = min(count, 41)
-        if max_channel <= 32:
-            return []
-        start_channel = 33
-        fetch_range = max_channel - start_channel + 1
-        if fetch_range <= 0:
-            return []
+        start_channel = 1
+        fetch_range = max(1, max_channel - start_channel + 1)
 
         energy_by_ch = await self._fetch_0287_simplex_list(
             host,
@@ -415,6 +398,8 @@ class HemsEchonetClient:
             max(energy_by_ch.keys(), default=0),
             max(current_by_ch.keys(), default=0),
         )
+        if detected_max < start_channel:
+            return []
         if detected_max > max_channel:
             max_channel = min(detected_max, 41)
 
@@ -427,41 +412,17 @@ class HemsEchonetClient:
                 energy = "FFFFFFFE"
             if len(current) != 8:
                 current = "7FFE7FFE"
+            composite = f"{energy}{current}"
+            # 1..32: keep standard EPCs (0xD0..0xEF), but prioritize list-derived values.
+            if 1 <= ch <= 32:
+                epc = 0xD0 + (ch - 1)
+                payload[self._epc_to_key(epc)] = composite
+                continue
+            # 33+: exposed as virtual channels.
             key = self._virtual_0287_key(ch)
-            payload[key] = f"{energy}{current}"
+            payload[key] = composite
             virtual_get_map.append(key)
         return virtual_get_map
-
-    async def _map_0287_direct_epcs(
-        self,
-        host: str,
-        eoj_gc: int,
-        eoj_cc: int,
-        eoj_ci: int,
-        get_map: list[int],
-        payload: dict[str, Any],
-    ) -> list[str]:
-        out: list[str] = []
-        for channel in range(33, 42):
-            epc = 0xF0 + (channel - 33)
-            if epc not in get_map:
-                continue
-            epc_key = self._epc_to_key(epc)
-            value = payload.get(epc_key)
-            if value is None:
-                value = await self._get_single_epc_value(host, eoj_gc, eoj_cc, eoj_ci, epc)
-                if value is not None:
-                    payload[epc_key] = value
-            if value is None:
-                continue
-            token = self._normalize_fixed_hex_token(value, size=8)
-            if not token:
-                continue
-            vkey = self._virtual_0287_key(channel)
-            payload[epc_key] = token
-            payload[vkey] = token
-            out.append(vkey)
-        return out
 
     async def _fetch_0287_simplex_list(
         self,
@@ -753,21 +714,6 @@ class HemsEchonetClient:
         if len(token) % 2 != 0:
             token = f"0{token}"
         if not all(ch in "0123456789ABCDEF" for ch in token):
-            return ""
-        return token
-
-    @classmethod
-    def _normalize_fixed_hex_token(cls, value: Any, size: int) -> str:
-        token = cls._normalize_hex_token(value)
-        if not token:
-            return ""
-        width = int(size) * 2
-        if width <= 0:
-            return ""
-        if len(token) > width:
-            return ""
-        token = token.zfill(width)
-        if len(token) != width:
             return ""
         return token
 
