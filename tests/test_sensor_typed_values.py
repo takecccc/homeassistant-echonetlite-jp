@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components.sensor import SensorStateClass
 
 from custom_components.echonetlite_jp.sensor import HemsEchonetEpcSensor
 
@@ -45,3 +46,66 @@ def test_typed_sensor_does_not_fallback_to_raw_string_for_invalid_value() -> Non
 
     sensor = HemsEchonetEpcSensor(coordinator, "t", "0xE2")
     assert sensor.native_value is None
+
+
+def test_c0_applies_c2_coefficient_and_remains_available() -> None:
+    coordinator = _FakeCoordinator(
+        data={
+            "t": {
+                "eoj": "028701",
+                # raw=0x01000000 (16,777,216), C2=0x0C (x1000)
+                # expected=16,777,216,000
+                "payload": {"0xC0": "01000000", "0xC2": "0C"},
+                "get_map": ["0xC0", "0xC2"],
+                "set_map": [],
+            }
+        },
+        meta={
+            "name": "積算電力量計測値 (正方向)",
+            "type": "number",
+            "unit": "kWh",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 99999999,
+            "multiple": 1,
+            "coefficient": ["0xC2"],
+            "no_data_codes": [0xFFFFFFFE],
+        },
+    )
+
+    sensor = HemsEchonetEpcSensor(coordinator, "t", "0xC0")
+    assert sensor.available is True
+    assert sensor.device_class == SensorDeviceClass.ENERGY
+    assert sensor.state_class == SensorStateClass.TOTAL_INCREASING
+    assert sensor.native_value == 16777216000.0
+
+
+def test_c1_applies_c2_fractional_coefficient() -> None:
+    coordinator = _FakeCoordinator(
+        data={
+            "t": {
+                "eoj": "028701",
+                # raw=100, C2=0x01 (x0.1) -> 10.0
+                "payload": {"0xC1": "00000064", "0xC2": "01"},
+                "get_map": ["0xC1", "0xC2"],
+                "set_map": [],
+            }
+        },
+        meta={
+            "name": "積算電力量計測値 (逆方向)",
+            "type": "number",
+            "unit": "kWh",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 99999999,
+            "multiple": 1,
+            "coefficient": ["0xC2"],
+            "no_data_codes": [0xFFFFFFFE],
+        },
+    )
+
+    sensor = HemsEchonetEpcSensor(coordinator, "t", "0xC1")
+    assert sensor.available is True
+    assert sensor.device_class == SensorDeviceClass.ENERGY
+    assert sensor.state_class == SensorStateClass.TOTAL_INCREASING
+    assert sensor.native_value == 10.0

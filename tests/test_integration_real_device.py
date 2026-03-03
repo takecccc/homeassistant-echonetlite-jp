@@ -62,6 +62,17 @@ def _total_channel_count(simplex: int | None, duplex: int | None) -> int | None:
     return total
 
 
+def _normalize_epc_key(value: str) -> str | None:
+    token = str(value).strip()
+    if not token.startswith("0x") and not token.startswith("0X"):
+        return None
+    try:
+        epc = int(token, 16)
+    except ValueError:
+        return None
+    return f"0x{epc:02X}"
+
+
 @pytest.mark.asyncio
 async def test_real_device_fetch_has_target(socket_enabled: None) -> None:
     host = _required_env("ECHONET_TEST_HOST")
@@ -283,5 +294,85 @@ async def test_real_device_0287_fetches_channel_lists(socket_enabled: None) -> N
         for data in parsed_payload_lists:
             for token in data.values():
                 assert isinstance(token, str)
+    finally:
+        await client.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_real_device_all_get_entities_are_stored_in_payload(socket_enabled: None) -> None:
+    host = _required_env("ECHONET_TEST_HOST")
+    eoj = os.getenv("ECHONET_TEST_EOJ", "").strip()
+
+    client = HemsEchonetClient(
+        host=host,
+        eoj=eoj,
+        cidr="",
+        listen_host="0.0.0.0",
+        listen_port=int(os.getenv("ECHONET_TEST_LISTEN_PORT", "3610")),
+        discovery_wait=float(os.getenv("ECHONET_TEST_DISCOVERY_WAIT", "1.0")),
+        timeout=float(os.getenv("ECHONET_TEST_TIMEOUT", "3.0")),
+        refresh_interval=60.0,
+        max_opc=16,
+        rediscover_on_error=False,
+        mra_dir="custom_components/echonetlite_jp/mra_data",
+        debug=False,
+    )
+
+    try:
+        await client.async_initialize()
+
+        merged: dict[str, dict[str, Any]] = {}
+        attempts = max(1, int(os.getenv("ECHONET_TEST_FETCH_ATTEMPTS", "3")))
+        for _ in range(attempts):
+            data = await client.async_fetch()
+            for target_key, item in data.items():
+                prev = merged.get(target_key)
+                if not isinstance(prev, dict):
+                    merged[target_key] = item
+                    continue
+                prev_payload = prev.get("payload", {})
+                new_payload = item.get("payload", {})
+                if isinstance(prev_payload, dict) and isinstance(new_payload, dict):
+                    prev_payload.update(new_payload)
+                    prev["payload"] = prev_payload
+                if (not prev.get("get_map")) and item.get("get_map"):
+                    prev["get_map"] = item.get("get_map")
+                if (not prev.get("set_map")) and item.get("set_map"):
+                    prev["set_map"] = item.get("set_map")
+                prev_errors = prev.get("errors", [])
+                new_errors = item.get("errors", [])
+                if isinstance(prev_errors, list) and isinstance(new_errors, list):
+                    prev["errors"] = sorted(set([*prev_errors, *new_errors]))
+
+        assert merged, "async_fetch returned no targets"
+
+        excluded_get_keys = {"0x9D", "0x9E", "0x9F"}
+        failures: list[str] = []
+        for target_key, item in merged.items():
+            payload = item.get("payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
+            get_map = item.get("get_map", [])
+            normalized_get: list[str] = []
+            if isinstance(get_map, list):
+                for key in get_map:
+                    if not isinstance(key, str):
+                        continue
+                    if key.startswith("v"):
+                        normalized_get.append(key)
+                        continue
+                    epc = _normalize_epc_key(key)
+                    if epc:
+                        normalized_get.append(epc)
+            missing = [
+                key
+                for key in sorted(set(normalized_get))
+                if key not in excluded_get_keys and key not in payload
+            ]
+            if missing:
+                eoj_desc = str(item.get("eoj") or "unknown")
+                failures.append(f"{target_key}({eoj_desc}): missing={missing[:20]}")
+
+        assert not failures, "some GET entities are not stored in payload: " + "; ".join(failures)
     finally:
         await client.async_shutdown()
