@@ -386,6 +386,10 @@ class HemsEchonetEpcSensor(CoordinatorEntity[HemsEchonetCoordinator], SensorEnti
             multiple = meta.get("multiple")
             if isinstance(multiple, (int, float)):
                 number = float(number) * float(multiple)
+            payload_map = payload if isinstance(payload, dict) else {}
+            coef = _coefficient_factor(payload_map, meta.get("coefficient"))
+            if coef is not None:
+                number = float(number) * coef
             if not _in_numeric_range(number, meta):
                 return None
             if isinstance(number, float):
