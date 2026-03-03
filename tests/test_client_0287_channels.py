@@ -243,6 +243,12 @@ def test_build_fetch_map_excludes_d0_to_ef_for_0287(client: HemsEchonetClient) -
     assert fetch_map == [0x80, 0xB1]
 
 
+def test_parse_0287_list_value_from_structured_dict(client: HemsEchonetClient) -> None:
+    value = {"startChannel": 1, "range": 2, "values": [0x11, 0x12]}
+    out = client._parse_0287_list_value(value, item_size=4, ignore_reported_start=True)
+    assert out == {1: "00000011", 2: "00000012"}
+
+
 @pytest.mark.asyncio
 async def test_augment_0287_channels_prefers_list_for_channel_1_to_32(
     client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch

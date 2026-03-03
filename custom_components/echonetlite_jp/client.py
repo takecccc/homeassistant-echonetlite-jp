@@ -333,6 +333,7 @@ class HemsEchonetClient:
         count_simplex = self._decode_channel_count(b1)
         count_duplex = self._decode_channel_count(b8)
         count_both_known = isinstance(count_simplex, int) and isinstance(count_duplex, int)
+        has_count_info = isinstance(count_simplex, int) or isinstance(count_duplex, int)
         count = 0
         if isinstance(count_simplex, int):
             count += count_simplex
@@ -418,7 +419,10 @@ class HemsEchonetClient:
             max(current_by_ch.keys(), default=0),
         )
         if detected_max < start_channel:
-            return []
+            if has_count_info and count > 0:
+                detected_max = max_channel
+            else:
+                return []
         # When both B1/B8 are available, keep strict channel count from metadata.
         if not count_both_known and detected_max > max_channel:
             max_channel = min(detected_max, 41)
@@ -473,7 +477,13 @@ class HemsEchonetClient:
             return {}
         state = getattr(self._client, "_state", {})
         instance = self._get_instance_state(state, host, eoj_gc, eoj_cc, eoj_ci)
-        token = self._normalize_hex_token(instance.get(list_epc))
+        value = instance.get(list_epc)
+        structured = self._parse_0287_list_value(
+            value, item_size=item_size, ignore_reported_start=ignore_reported_start
+        )
+        if structured:
+            return structured
+        token = self._normalize_hex_token(value)
         if not token:
             return {}
         try:
@@ -608,6 +618,70 @@ class HemsEchonetClient:
                 break
             out[key] = values[key]
         return out
+
+    @classmethod
+    def _parse_0287_list_value(
+        cls, value: Any, *, item_size: int, ignore_reported_start: bool
+    ) -> dict[int, str]:
+        if item_size <= 0:
+            return {}
+        data_list: list[Any] | None = None
+        start = 1
+        expected_range: int | None = None
+
+        if isinstance(value, dict):
+            for key in ("startChannel", "start_channel", "start", "channelStart"):
+                v = value.get(key)
+                if isinstance(v, int) and v > 0:
+                    start = v
+                    break
+            for key in ("range", "count", "length", "items"):
+                v = value.get(key)
+                if isinstance(v, int) and v > 0:
+                    expected_range = v
+                    break
+            list_candidates = [v for v in value.values() if isinstance(v, (list, tuple))]
+            if list_candidates:
+                data_list = list(max(list_candidates, key=len))
+        elif isinstance(value, (list, tuple)):
+            data_list = list(value)
+        else:
+            return {}
+
+        if not data_list:
+            return {}
+        if isinstance(expected_range, int) and expected_range > 0:
+            data_list = data_list[:expected_range]
+
+        out: dict[int, str] = {}
+        for idx, item in enumerate(data_list, start=1):
+            token = cls._to_fixed_hex(item, item_size)
+            if not token:
+                continue
+            channel = idx if ignore_reported_start else (start + idx - 1)
+            out[channel] = token
+        return out
+
+    @classmethod
+    def _to_fixed_hex(cls, value: Any, size: int) -> str:
+        width = int(size) * 2
+        if width <= 0:
+            return ""
+        if isinstance(value, (bytes, bytearray)):
+            raw = bytes(value)
+            if len(raw) != size:
+                return ""
+            return raw.hex().upper()
+        if isinstance(value, int):
+            if value < 0 or value >= (1 << (size * 8)):
+                return ""
+            return f"{value:0{width}X}"
+        token = cls._normalize_hex_token(value)
+        if not token:
+            return ""
+        if len(token) > width:
+            return ""
+        return token.zfill(width)
 
     async def _discover_hosts(self) -> list[str]:
         assert self._client is not None
