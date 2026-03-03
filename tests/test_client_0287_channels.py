@@ -122,6 +122,51 @@ async def test_augment_0287_channels_prefers_direct_f0_to_f8(
     assert payload["v0287_ch34"] == "00000065000C000D"
 
 
+@pytest.mark.asyncio
+async def test_augment_0287_channels_merges_simplex_and_duplex_when_set_not_supported(
+    client: HemsEchonetClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_simplex(*args, **kwargs):
+        list_epc = kwargs["list_epc"]
+        if list_epc == 0xB3:
+            return {33: "000000A1", 34: "000000A2", 35: "000000A3", 36: "000000A4"}
+        if list_epc == 0xB5:
+            return {33: "00110012", 34: "00130014", 35: "00150016", 36: "00170018"}
+        if list_epc == 0xBC:
+            # Duplex local channel 1
+            return {1: "00210022"}
+        return {}
+
+    async def fake_duplex(*args, **kwargs):
+        # Duplex local channel 1
+        return {1: "000000B1"}
+
+    monkeypatch.setattr(client, "_fetch_0287_simplex_list", fake_simplex)
+    monkeypatch.setattr(client, "_fetch_0287_duplex_energy_list", fake_duplex)
+
+    payload = {
+        "0xB1": "24",  # simplex=36
+        "0xB8": "01",  # duplex=1 -> total=37
+    }
+    extra = await client._augment_0287_channels(
+        host="127.0.0.1",
+        eoj_gc=0x02,
+        eoj_cc=0x87,
+        eoj_ci=0x01,
+        get_map=[0xB3, 0xB5, 0xBA, 0xBC],
+        set_map=[],
+        payload=payload,
+    )
+
+    assert extra == ["v0287_ch33", "v0287_ch34", "v0287_ch35", "v0287_ch36", "v0287_ch37"]
+    assert payload["v0287_ch33"] == "000000A100110012"
+    assert payload["v0287_ch34"] == "000000A200130014"
+    assert payload["v0287_ch35"] == "000000A300150016"
+    assert payload["v0287_ch36"] == "000000A400170018"
+    # ch37 from duplex local channel 1 shifted by simplex count(36)
+    assert payload["v0287_ch37"] == "000000B100210022"
+
+
 def test_resolve_metadata_for_virtual_channel(client: HemsEchonetClient) -> None:
     meta = client.resolve_epc_metadata_by_eoj("028701", "v0287_ch33")
     assert isinstance(meta, dict)

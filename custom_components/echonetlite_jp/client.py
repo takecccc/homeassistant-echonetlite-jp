@@ -329,10 +329,18 @@ class HemsEchonetClient:
 
         count_simplex = self._decode_channel_count(b1)
         count_duplex = self._decode_channel_count(b8)
-        candidates = [c for c in (count_simplex, count_duplex) if isinstance(c, int)]
-        if not candidates:
+        if count_simplex is None and count_duplex is None:
             return []
-        count = max(candidates)
+        count = 0
+        if isinstance(count_simplex, int):
+            count += count_simplex
+        if isinstance(count_duplex, int):
+            count += count_duplex
+        if count <= 0:
+            candidates = [c for c in (count_simplex, count_duplex) if isinstance(c, int)]
+            if not candidates:
+                return []
+            count = max(candidates)
         if count <= 32:
             return []
         max_channel = min(count, 41)
@@ -367,31 +375,41 @@ class HemsEchonetClient:
             item_size=4,
             can_set_range=(0xB4 in set_map),
         )
-        # Some devices expose only duplex lists for channel-range retrieval.
-        if not energy_by_ch:
-            energy_by_ch = await self._fetch_0287_duplex_energy_list(
-                host,
-                eoj_gc,
-                eoj_cc,
-                eoj_ci,
-                range_epc=0xB9,
-                list_epc=0xBA,
-                start_channel=start_channel,
-                fetch_range=fetch_range,
-            )
-        if not current_by_ch:
-            current_by_ch = await self._fetch_0287_simplex_list(
-                host,
-                eoj_gc,
-                eoj_cc,
-                eoj_ci,
-                range_epc=0xBB,
-                list_epc=0xBC,
-                start_channel=start_channel,
-                fetch_range=fetch_range,
-                item_size=4,
-                can_set_range=(0xBB in set_map),
-            )
+        duplex_energy_by_ch = await self._fetch_0287_duplex_energy_list(
+            host,
+            eoj_gc,
+            eoj_cc,
+            eoj_ci,
+            range_epc=0xB9,
+            list_epc=0xBA,
+            start_channel=start_channel,
+            fetch_range=fetch_range,
+            can_set_range=(0xB9 in set_map),
+        )
+        duplex_current_by_ch = await self._fetch_0287_simplex_list(
+            host,
+            eoj_gc,
+            eoj_cc,
+            eoj_ci,
+            range_epc=0xBB,
+            list_epc=0xBC,
+            start_channel=start_channel,
+            fetch_range=fetch_range,
+            item_size=4,
+            can_set_range=(0xBB in set_map),
+        )
+        energy_by_ch = self._merge_0287_channel_values(
+            simplex_by_ch=energy_by_ch,
+            duplex_by_ch=duplex_energy_by_ch,
+            count_simplex=count_simplex,
+            count_duplex=count_duplex,
+        )
+        current_by_ch = self._merge_0287_channel_values(
+            simplex_by_ch=current_by_ch,
+            duplex_by_ch=duplex_current_by_ch,
+            count_simplex=count_simplex,
+            count_duplex=count_duplex,
+        )
 
         virtual_get_map: list[str] = []
         for ch in range(start_channel, max_channel + 1):
@@ -483,7 +501,7 @@ class HemsEchonetClient:
         count = min(reported_range, len(body) // item_size)
         out: dict[int, str] = {}
         for i in range(count):
-            channel = reported_start + i
+            channel = (i + 1) if not can_set_range else (reported_start + i)
             chunk = body[i * item_size : (i + 1) * item_size]
             out[channel] = chunk.hex().upper()
         return out
@@ -513,6 +531,7 @@ class HemsEchonetClient:
         list_epc: int,
         start_channel: int,
         fetch_range: int,
+        can_set_range: bool = True,
     ) -> dict[int, str]:
         # BA item is 8 bytes: normal(4) + reverse(4). Use normal direction to keep D0-compatible shape.
         raw_items = await self._fetch_0287_simplex_list(
@@ -525,11 +544,52 @@ class HemsEchonetClient:
             start_channel=start_channel,
             fetch_range=fetch_range,
             item_size=8,
+            can_set_range=can_set_range,
         )
         out: dict[int, str] = {}
         for ch, token in raw_items.items():
             if isinstance(token, str) and len(token) >= 8:
                 out[ch] = token[:8]
+        return out
+
+    @staticmethod
+    def _merge_0287_channel_values(
+        *,
+        simplex_by_ch: dict[int, str],
+        duplex_by_ch: dict[int, str],
+        count_simplex: int | None,
+        count_duplex: int | None,
+    ) -> dict[int, str]:
+        if not duplex_by_ch:
+            return dict(simplex_by_ch)
+        if not simplex_by_ch:
+            return dict(duplex_by_ch)
+
+        out: dict[int, str] = dict(simplex_by_ch)
+        # When duplex keys are already absolute channel numbers (e.g. 33+),
+        # keep them as-is.
+        min_duplex_key = min(duplex_by_ch.keys(), default=0)
+        if min_duplex_key > 1:
+            out.update(duplex_by_ch)
+            return out
+
+        shift = 0
+        if isinstance(count_simplex, int) and count_simplex > 0:
+            shift = count_simplex
+        else:
+            shift = max(simplex_by_ch.keys(), default=0)
+
+        if shift <= 0:
+            for ch, token in duplex_by_ch.items():
+                out[ch] = token
+            return out
+
+        limit = count_duplex if isinstance(count_duplex, int) and count_duplex > 0 else None
+        for local_ch, token in sorted(duplex_by_ch.items()):
+            if limit is not None and local_ch > limit:
+                continue
+            global_ch = shift + local_ch
+            out[global_ch] = token
         return out
 
     async def _discover_hosts(self) -> list[str]:
