@@ -120,6 +120,7 @@ class HemsEchonetClient:
 
     async def async_refresh_inventory(self) -> None:
         assert self._client is not None
+        previous_targets = list(self._targets)
         hosts = await self._discover_hosts()
         target_map: dict[str, Target] = {}
         for host in hosts:
@@ -153,9 +154,16 @@ class HemsEchonetClient:
                     target_map[t.key] = t
                 except Exception:
                     continue
-        self._targets = sorted(target_map.values(), key=lambda x: (x.uid, x.eoj))
+        discovered_targets = sorted(target_map.values(), key=lambda x: (x.uid, x.eoj))
+        if discovered_targets or not previous_targets:
+            self._targets = discovered_targets
+            retry_interval = self._refresh_interval
+        else:
+            # Keep previous inventory when refresh temporarily fails.
+            self._targets = previous_targets
+            retry_interval = min(self._refresh_interval, 60.0) if self._refresh_interval > 0 else 60.0
         self._next_refresh_at = (
-            time.monotonic() + self._refresh_interval if self._refresh_interval > 0 else None
+            time.monotonic() + retry_interval if retry_interval > 0 else None
         )
 
     async def async_fetch(self) -> dict[str, dict[str, Any]]:
