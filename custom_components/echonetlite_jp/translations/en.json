@@ -1,0 +1,68 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ECHONET Lite",
+        "description": "Leave the hosts empty to find devices by multicast. Devices must be on the same network segment as Home Assistant.",
+        "data": {
+          "hosts": "Hosts",
+          "interface": "Network interface address",
+          "scan_interval": "Polling interval"
+        },
+        "data_description": {
+          "hosts": "Comma-separated IPv4 addresses. Empty to discover automatically.",
+          "interface": "IPv4 address of the interface used for multicast. Empty for the default.",
+          "scan_interval": "How often all devices are polled."
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Enter IPv4 addresses separated by commas.",
+      "invalid_interface": "Enter the IPv4 address of a local interface.",
+      "cannot_bind": "UDP port 3610 is not available. Another ECHONET Lite integration may be using it.",
+      "no_devices_found": "No ECHONET Lite devices responded."
+    },
+    "abort": {
+      "single_instance_allowed": "Only one ECHONET Lite JP entry can be configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "hosts": "Hosts",
+          "interface": "Network interface address",
+          "scan_interval": "Polling interval"
+        },
+        "data_description": {
+          "hosts": "Comma-separated IPv4 addresses. Empty to discover automatically.",
+          "interface": "IPv4 address of the interface used for multicast. Empty for the default.",
+          "scan_interval": "How often all devices are polled."
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Enter IPv4 addresses separated by commas.",
+      "invalid_interface": "Enter the IPv4 address of a local interface."
+    }
+  },
+  "services": {
+    "get_property": {
+      "name": "Get property",
+      "description": "Reads one property (EPC) from a device and returns the raw and decoded value.",
+      "fields": {
+        "device_id": {"name": "Device", "description": "ECHONET Lite device to read from."},
+        "epc": {"name": "EPC", "description": "Property code in hex, e.g. 0x80."}
+      }
+    },
+    "set_property": {
+      "name": "Set property",
+      "description": "Writes raw data (EDT) to one property (EPC) of a device.",
+      "fields": {
+        "device_id": {"name": "Device", "description": "ECHONET Lite device to write to."},
+        "epc": {"name": "EPC", "description": "Property code in hex, e.g. 0x80."},
+        "edt": {"name": "EDT", "description": "Data in hex, e.g. 30."}
+      }
+    }
+  }
+}

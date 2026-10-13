@@ -1,36 +1,14 @@
-# Python bytecode / cache
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Virtual environments
 .venv/
-venv/
-
-# Tool caches
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
-
-# Coverage / test artifacts
+.mypy_cache/
 .coverage
-.coverage.*
 htmlcov/
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
-
-# Environment files
-.env
-.env.*
-
-# OS / editor noise
 .DS_Store
 
+# Local artifacts of the old debug CLI / local MRA copies
 /mra/
-
-# Local registry / sqlite
+/echonet_test/
 *.sqlite3
-*.db

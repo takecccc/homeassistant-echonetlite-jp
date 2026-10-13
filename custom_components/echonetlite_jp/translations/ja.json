@@ -2,31 +2,67 @@
   "config": {
     "step": {
       "user": {
-        "title": "ECHONET Lite JP",
-        "description": "ECHONET Lite 収集設定を入力してください。",
+        "title": "ECHONET Lite",
+        "description": "ホストを空欄にするとマルチキャストで機器を自動検出します。機器は Home Assistant と同じネットワークセグメントにある必要があります。",
         "data": {
-          "host": "ホスト (任意)",
-          "eoj": "EOJ フィルタ (カンマ区切り, 任意)",
-          "cidr": "CIDR フィルタ (任意)",
-          "scan_interval": "取得間隔(秒)",
-          "listen_host": "受信ホスト",
-          "listen_port": "受信ポート",
-          "discovery_wait": "探索待ち時間(秒)",
-          "timeout": "タイムアウト(秒)",
-          "refresh_interval": "インベントリ更新間隔(秒)",
-          "max_opc": "1リクエストあたり最大OPC",
-          "mra_dir": "MRAディレクトリ(任意)",
-          "rediscover_on_error": "エラー時に再探索",
-          "exclude_unknown_epcs": "unknown EPC のエンティティを除外",
-          "exclude_metadata_epcs": "識別・静的情報 EPC を除外",
-          "exclude_range_epcs": "範囲指定/クエリ EPC を除外",
-          "exclude_auxiliary_epcs": "補助 EPC を除外"
+          "hosts": "ホスト",
+          "interface": "ネットワークインターフェースのアドレス",
+          "scan_interval": "ポーリング間隔"
+        },
+        "data_description": {
+          "hosts": "IPv4 アドレスをカンマ区切りで指定。空欄で自動検出。",
+          "interface": "マルチキャストに使うインターフェースの IPv4 アドレス。空欄で既定。",
+          "scan_interval": "全機器の値を取得する間隔。"
         }
       }
     },
     "error": {
-      "invalid_host": "ホストのIPアドレスが不正です。",
-      "invalid_cidr": "CIDR が不正です。"
+      "invalid_host": "IPv4 アドレスをカンマ区切りで入力してください。",
+      "invalid_interface": "ローカルインターフェースの IPv4 アドレスを入力してください。",
+      "cannot_bind": "UDP ポート 3610 を使用できません。他の ECHONET Lite 統合が使用している可能性があります。",
+      "no_devices_found": "応答する ECHONET Lite 機器が見つかりませんでした。"
+    },
+    "abort": {
+      "single_instance_allowed": "ECHONET Lite JP は 1 つだけ設定できます。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "hosts": "ホスト",
+          "interface": "ネットワークインターフェースのアドレス",
+          "scan_interval": "ポーリング間隔"
+        },
+        "data_description": {
+          "hosts": "IPv4 アドレスをカンマ区切りで指定。空欄で自動検出。",
+          "interface": "マルチキャストに使うインターフェースの IPv4 アドレス。空欄で既定。",
+          "scan_interval": "全機器の値を取得する間隔。"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "IPv4 アドレスをカンマ区切りで入力してください。",
+      "invalid_interface": "ローカルインターフェースの IPv4 アドレスを入力してください。"
+    }
+  },
+  "services": {
+    "get_property": {
+      "name": "プロパティ取得",
+      "description": "機器のプロパティ (EPC) を 1 つ読み出し、生データとデコード結果を返します。",
+      "fields": {
+        "device_id": {"name": "機器", "description": "読み出す ECHONET Lite 機器。"},
+        "epc": {"name": "EPC", "description": "プロパティコード (16進数、例: 0x80)。"}
+      }
+    },
+    "set_property": {
+      "name": "プロパティ設定",
+      "description": "機器のプロパティ (EPC) に生データ (EDT) を書き込みます。",
+      "fields": {
+        "device_id": {"name": "機器", "description": "書き込む ECHONET Lite 機器。"},
+        "epc": {"name": "EPC", "description": "プロパティコード (16進数、例: 0x80)。"},
+        "edt": {"name": "EDT", "description": "データ (16進数、例: 30)。"}
+      }
     }
   }
 }

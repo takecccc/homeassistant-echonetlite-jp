@@ -1,35 +1,23 @@
+"""Constants for the ECHONET Lite JP integration."""
+
 from __future__ import annotations
 
+from datetime import timedelta
+
+from homeassistant.const import Platform
+
 DOMAIN = "echonetlite_jp"
-PLATFORMS = ["sensor", "switch", "number", "select"]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
-CONF_EOJ = "eoj"
-CONF_CIDR = "cidr"
-CONF_LISTEN_HOST = "listen_host"
-CONF_LISTEN_PORT = "listen_port"
-CONF_DISCOVERY_WAIT = "discovery_wait"
-CONF_TIMEOUT = "timeout"
-CONF_REFRESH_INTERVAL = "refresh_interval"
-CONF_MAX_OPC = "max_opc"
-CONF_REDISCOVER_ON_ERROR = "rediscover_on_error"
-CONF_MRA_DIR = "mra_dir"
-CONF_EXCLUDE_UNKNOWN_EPCS = "exclude_unknown_epcs"
-CONF_EXCLUDE_METADATA_EPCS = "exclude_metadata_epcs"
-CONF_EXCLUDE_RANGE_EPCS = "exclude_range_epcs"
-CONF_EXCLUDE_AUXILIARY_EPCS = "exclude_auxiliary_epcs"
+CONF_HOSTS = "hosts"
+CONF_INTERFACE = "interface"
 
-DEFAULT_EOJ = ""
-DEFAULT_CIDR = ""
-DEFAULT_LISTEN_HOST = "0.0.0.0"
-DEFAULT_LISTEN_PORT = 3610
-DEFAULT_DISCOVERY_WAIT = 2.0
-DEFAULT_TIMEOUT = 3.0
-DEFAULT_REFRESH_INTERVAL = 86400.0
-DEFAULT_MAX_OPC = 24
-DEFAULT_REDISCOVER_ON_ERROR = True
-DEFAULT_MRA_DIR = ""
-DEFAULT_EXCLUDE_UNKNOWN_EPCS = True
-DEFAULT_EXCLUDE_METADATA_EPCS = True
-DEFAULT_EXCLUDE_RANGE_EPCS = True
-DEFAULT_EXCLUDE_AUXILIARY_EPCS = True
 DEFAULT_SCAN_INTERVAL = 30
+DISCOVERY_WAIT = 3.0
+REDISCOVERY_INTERVAL = timedelta(minutes=30)

@@ -1,285 +1,38 @@
+"""Switches for settable two-state ECHONET Lite properties."""
+
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
-from .coordinator import HemsEchonetCoordinator
-from .entity_filter import EntityFilterOptions
-from .entity_filter import should_register_epc
+from .coordinator import EchonetConfigEntry
+from .echonet.codec import encode
+from .entity import EchonetEntity, async_setup_platform
 
-_EPC_KEY_RE = re.compile(r"^0x[0-9A-Fa-f]{2}$")
-_KNOWN_ONOFF_EPCS = {"0x80"}
-_ON_LIKE = {"1", "01", "30", "41", "ON", "TRUE"}
-_OFF_LIKE = {"0", "00", "31", "42", "OFF", "FALSE"}
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant, entry: EchonetConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    coordinator: HemsEchonetCoordinator = hass.data[DOMAIN][entry.entry_id]
-    known_entity_keys: set[tuple[str, str]] = set()
-    filter_options = EntityFilterOptions.from_entry(entry)
-
-    def _epc_keys_from_map(values: Any) -> list[str]:
-        out: list[str] = []
-        if not isinstance(values, list):
-            return out
-        for epc_key in values:
-            if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-                normalized = _normalize_epc_key(epc_key)
-                if normalized:
-                    out.append(normalized)
-        return out
-
-    def current_entity_keys() -> list[tuple[str, str]]:
-        pairs: list[tuple[str, str]] = []
-        for target_key, data in coordinator.data.items():
-            eoj = str(data.get("eoj") or "").strip()
-            if not eoj:
-                continue
-            set_map = _epc_keys_from_map(data.get("set_map", []))
-            for epc_key in set_map:
-                if not should_register_epc(coordinator.client, eoj, epc_key, filter_options):
-                    continue
-                meta = coordinator.client.resolve_epc_metadata_by_eoj(eoj, epc_key)
-                if _is_switch_epc(epc_key, meta):
-                    pairs.append((target_key, epc_key))
-        return sorted(set(pairs))
-
-    def add_new_entities() -> None:
-        new_pairs = [pair for pair in current_entity_keys() if pair not in known_entity_keys]
-        if not new_pairs:
-            return
-        for pair in new_pairs:
-            known_entity_keys.add(pair)
-        async_add_entities(
-            [HemsEchonetEpcSwitch(coordinator, target_key, epc_key) for target_key, epc_key in new_pairs]
-        )
-
-    add_new_entities()
-    entry.async_on_unload(coordinator.async_add_listener(add_new_entities))
+    async_setup_platform(entry, async_add_entities, Platform.SWITCH, EchonetSwitch)
 
 
-class HemsEchonetEpcSwitch(CoordinatorEntity[HemsEchonetCoordinator], SwitchEntity):
-    _attr_has_entity_name = True
-
-    def __init__(self, coordinator: HemsEchonetCoordinator, target_key: str, epc_key: str) -> None:
-        super().__init__(coordinator)
-        self._target_key = target_key
-        self._epc_key = _normalize_epc_key(epc_key) or epc_key
-        self._attr_unique_id = f"{DOMAIN}-{target_key}-{self._epc_key}-switch"
-        self._value_override: Any = None
-        self._last_error: str | None = None
-
-    @property
-    def name(self) -> str:
-        data = self.coordinator.data.get(self._target_key, {})
-        manufacturer = str(data.get("manufacturer") or "").strip()
-        device_name = str(data.get("device_name") or "").strip()
-        eoj_desc = str(data.get("eoj_desc") or "").strip()
-        eoj = str(data.get("eoj") or "unknown")
-        prop_name = str((self._meta() or {}).get("name") or "").strip()
-        base_parts = [
-            p for p in (manufacturer, device_name, f"{eoj_desc} ({eoj})" if eoj_desc else eoj) if p
-        ]
-        base = " ".join(base_parts) if base_parts else f"ECHONET {eoj}"
-        return f"{base} {prop_name or 'スイッチ'}"
-
-    @property
-    def available(self) -> bool:
-        data = self.coordinator.data.get(self._target_key, {})
-        set_map = data.get("set_map", [])
-        return self._epc_key in _epc_keys_from_map(set_map)
-
+class EchonetSwitch(EchonetEntity, SwitchEntity):
     @property
     def is_on(self) -> bool | None:
-        raw_value = self._current_raw_value()
-        if raw_value is None:
-            return None
-        result = _to_bool(raw_value)
-        return result
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        data = self.coordinator.data.get(self._target_key, {})
-        raw_value = self._current_raw_value()
-        return {
-            "host": data.get("host"),
-            "eoj": data.get("eoj"),
-            "uid": data.get("uid"),
-            "epc": self._epc_key,
-            "mra_name": (self._meta() or {}).get("name"),
-            "raw_value": raw_value,
-            "last_error": self._last_error,
-            "errors": data.get("errors", []),
-        }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        data = self.coordinator.data.get(self._target_key, {})
-        uid = str(data.get("uid") or "unknown")
-        eoj = str(data.get("eoj") or "unknown")
-        device_key = f"{uid}-{eoj}"
-        manufacturer = str(data.get("manufacturer") or "").strip() or "ECHONET Lite"
-        device_name = str(data.get("device_name") or "").strip()
-        eoj_desc = str(data.get("eoj_desc") or "").strip()
-        label_parts = [p for p in (manufacturer, device_name, f"{eoj_desc} ({eoj})" if eoj_desc else eoj) if p]
-        device_label = " ".join(label_parts) if label_parts else f"{manufacturer} {eoj}"
-        return {
-            "identifiers": {(DOMAIN, device_key)},
-            "name": device_label,
-            "manufacturer": manufacturer,
-            "model": eoj_desc or eoj,
-        }
+        return self.value
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        try:
-            await self._async_set_value(True)
-        except HomeAssistantError:
-            on_hex, _off_hex = self._resolve_on_off_edt()
-            await self._async_set(on_hex)
+        await self._async_write(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        try:
-            await self._async_set_value(False)
-        except HomeAssistantError:
-            _on_hex, off_hex = self._resolve_on_off_edt()
-            await self._async_set(off_hex)
+        await self._async_write(False)
 
-    def _current_raw_value(self) -> Any:
-        data = self.coordinator.data.get(self._target_key, {})
-        payload = data.get("payload", {})
-        if isinstance(payload, dict) and self._epc_key in payload:
-            return payload[self._epc_key]
-        return self._value_override
-
-    def _resolve_on_off_edt(self) -> tuple[str, str]:
-        current = self._current_raw_value()
-        token = _normalize_token(current)
-        if token in {"41", "42"}:
-            return "41", "42"
-        if token in {"01", "00"}:
-            return "01", "00"
-        return "30", "31"
-
-    async def _async_set(self, edt_hex: str) -> None:
-        try:
-            value = await self.coordinator.client.async_set_epc(self._target_key, self._epc_key, edt_hex)
-            self._value_override = value
-            self._last_error = None
-        except Exception as exc:  # noqa: BLE001
-            self._last_error = f"{type(exc).__name__}: {exc}"
-            raise HomeAssistantError(self._last_error) from exc
-        await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
-
-    async def _async_set_value(self, value: Any) -> None:
-        try:
-            updated = await self.coordinator.client.async_set_epc_value(
-                self._target_key, self._epc_key, value
-            )
-            self._value_override = updated
-            self._last_error = None
-        except Exception as exc:  # noqa: BLE001
-            self._last_error = f"{type(exc).__name__}: {exc}"
-            raise HomeAssistantError(self._last_error) from exc
-        await self.coordinator.async_request_refresh()
-        self.async_write_ha_state()
-
-    def _meta(self) -> dict[str, Any] | None:
-        data = self.coordinator.data.get(self._target_key, {})
-        eoj = str(data.get("eoj") or "").strip()
-        if not eoj:
-            return None
-        meta = self.coordinator.client.resolve_epc_metadata_by_eoj(eoj, self._epc_key)
-        if isinstance(meta, dict):
-            return meta
-        return None
-
-
-def _epc_keys_from_map(values: Any) -> list[str]:
-    out: list[str] = []
-    if not isinstance(values, list):
-        return out
-    for epc_key in values:
-        if isinstance(epc_key, str) and _EPC_KEY_RE.fullmatch(epc_key):
-            normalized = _normalize_epc_key(epc_key)
-            if normalized:
-                out.append(normalized)
-    return out
-
-
-def _is_switch_epc(epc_key: str, meta: Any) -> bool:
-    if epc_key in _KNOWN_ONOFF_EPCS:
-        return True
-    if not isinstance(meta, dict):
-        return False
-    if str(meta.get("type") or "").strip().lower() != "state":
-        return False
-    enum_map = meta.get("enum", {})
-    if not isinstance(enum_map, dict):
-        return False
-    return _is_binary_onoff_enum(enum_map)
-
-
-def _is_binary_onoff_enum(enum_map: dict[str, Any]) -> bool:
-    if len(enum_map) != 2:
-        return False
-    on_like = {"on", "true", "1"}
-    off_like = {"off", "false", "0"}
-    seen_on = False
-    seen_off = False
-    for label in enum_map.values():
-        if not isinstance(label, str):
-            return False
-        norm = label.strip().lower()
-        if norm in on_like:
-            seen_on = True
-        elif norm in off_like:
-            seen_off = True
-        else:
-            return False
-    return seen_on and seen_off
-
-
-def _to_bool(raw_value: Any) -> bool | None:
-    token = _normalize_token(raw_value)
-    if token in _ON_LIKE:
-        return True
-    if token in _OFF_LIKE:
-        return False
-    return None
-
-
-def _normalize_token(raw_value: Any) -> str:
-    if isinstance(raw_value, bool):
-        return "TRUE" if raw_value else "FALSE"
-    if isinstance(raw_value, int):
-        return f"{raw_value:02X}"
-    if raw_value is None:
-        return ""
-    s = str(raw_value).strip().upper()
-    if s.startswith("0X"):
-        s = s[2:]
-    return s
-
-
-def _normalize_epc_key(value: str) -> str | None:
-    raw = value.strip()
-    if not _EPC_KEY_RE.fullmatch(raw):
-        return None
-    try:
-        epc = int(raw, 16)
-    except ValueError:
-        return None
-    return f"0x{epc:02X}"
+    async def _async_write(self, on: bool) -> None:
+        assert self.spec.epc is not None
+        await self.coordinator.async_set(self.device, self.spec.epc, encode(self.spec.schema, on))

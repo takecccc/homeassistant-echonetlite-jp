@@ -1,19 +1,38 @@
 [project]
-name = "hems-echonet"
-version = "0.1.0"
-description = "Fetch and display Smart Cosmo ECHONET Lite values with pychonet"
+name = "homeassistant-echonetlite-jp"
+version = "1.0.0"
+description = "Home Assistant custom integration for ECHONET Lite devices, driven by the ECHONET MRA"
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-  "pychonet>=2.6.18",
-]
+requires-python = ">=3.12"
+dependencies = []
 
 [tool.uv]
 package = false
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0.2",
-    "pytest-asyncio>=0.23.5",
-    "pytest-homeassistant-custom-component>=0.13.109",
+    "pytest-homeassistant-custom-component>=0.13.180",
+    "ruff>=0.8",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["custom_components/echonetlite_jp/mra_data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "PTH", "ASYNC"]
+ignore = [
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",
+    "ASYNC109",  # explicit per-request timeouts are part of the transport API
+    "RUF001", "RUF002", "RUF003",  # Japanese text
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLC0415"]
+"custom_components/echonetlite_jp/echonet/manufacturers.py" = ["E501"]

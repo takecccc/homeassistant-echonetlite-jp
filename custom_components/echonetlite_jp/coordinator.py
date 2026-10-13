@@ -1,60 +1,89 @@
+"""Data update coordinator for ECHONET Lite JP."""
+
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
-from typing import Any
 
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
-from .client import HemsEchonetClient
-from .const import CONF_CIDR
-from .const import CONF_DISCOVERY_WAIT
-from .const import CONF_EOJ
-from .const import CONF_LISTEN_HOST
-from .const import CONF_LISTEN_PORT
-from .const import CONF_MAX_OPC
-from .const import CONF_MRA_DIR
-from .const import CONF_REDISCOVER_ON_ERROR
-from .const import CONF_REFRESH_INTERVAL
-from .const import CONF_TIMEOUT
-from .const import DEFAULT_SCAN_INTERVAL
-from .const import DOMAIN
+from .const import DOMAIN, REDISCOVERY_INTERVAL
+from .echonet.client import EchonetError
+from .echonet.device import EchonetDevice
+from .echonet.network import EchonetNetwork
+from .echonet.protocol import Frame
+from .echonet.transport import EchonetTimeoutError
+
+_LOGGER = logging.getLogger(__name__)
+
+type EchonetConfigEntry = ConfigEntry[EchonetCoordinator]
 
 
-class HemsEchonetCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
-    def __init__(self, hass: HomeAssistant, entry_data: dict[str, Any]) -> None:
-        scan_interval = int(entry_data.get("scan_interval", DEFAULT_SCAN_INTERVAL))
+class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
+    """Polls every known object; rediscovers the network periodically."""
+
+    config_entry: EchonetConfigEntry
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: EchonetConfigEntry,
+        network: EchonetNetwork,
+        scan_interval: timedelta,
+    ) -> None:
         super().__init__(
             hass,
-            logger=hass.data[DOMAIN]["logger"],
+            _LOGGER,
+            config_entry=entry,
             name=DOMAIN,
-            update_interval=timedelta(seconds=scan_interval),
+            update_interval=scan_interval,
         )
-        self.client = HemsEchonetClient(
-            host=entry_data.get("host", ""),
-            eoj=entry_data.get(CONF_EOJ, ""),
-            cidr=entry_data.get(CONF_CIDR, ""),
-            listen_host=entry_data.get(CONF_LISTEN_HOST, "0.0.0.0"),
-            listen_port=int(entry_data.get(CONF_LISTEN_PORT, 3610)),
-            discovery_wait=float(entry_data.get(CONF_DISCOVERY_WAIT, 2.0)),
-            timeout=float(entry_data.get(CONF_TIMEOUT, 3.0)),
-            refresh_interval=float(entry_data.get(CONF_REFRESH_INTERVAL, 86400.0)),
-            max_opc=int(entry_data.get(CONF_MAX_OPC, 24)),
-            rediscover_on_error=bool(entry_data.get(CONF_REDISCOVER_ON_ERROR, True)),
-            mra_dir=str(entry_data.get(CONF_MRA_DIR, "")),
-            debug=bool(entry_data.get("debug", False)),
-        )
+        self.network = network
+        self._next_discovery = dt_util.utcnow()
 
-    async def async_config_entry_first_refresh(self) -> None:  # type: ignore[override]
-        try:
-            await self.client.async_initialize()
-        except Exception as exc:  # noqa: BLE001
-            raise UpdateFailed(f"failed to initialize pychonet client: {exc}") from exc
-        await super().async_config_entry_first_refresh()
+    @property
+    def language(self) -> str:
+        return self.hass.config.language
 
-    async def _async_update_data(self) -> dict[str, dict[str, Any]]:
+    async def _async_update_data(self) -> dict[str, EchonetDevice]:
+        now = dt_util.utcnow()
+        if now >= self._next_discovery or self.network.rediscovery_requested:
+            try:
+                new = await self.network.async_discover()
+            except OSError as err:
+                raise UpdateFailed(f"discovery failed: {err}") from err
+            for device in new:
+                _LOGGER.debug(
+                    "found %s at %s (%s)", device.id, device.host, device.class_def.name.en
+                )
+            self._next_discovery = now + REDISCOVERY_INTERVAL
+        if not self.network.devices:
+            # Try again on the next poll instead of waiting for the interval.
+            self._next_discovery = now
+            raise UpdateFailed("no ECHONET Lite devices found")
+        await self.network.async_poll()
+        return dict(self.network.devices)
+
+    @callback
+    def async_handle_notification(self, host: str, frame: Frame) -> None:
+        """Apply property notifications (INF) pushed by devices."""
+        # Devices are updated in place; notify listeners without rescheduling
+        # the next poll (frequent notifications would otherwise starve it).
+        if self.network.handle_notification(host, frame) is not None and self.data is not None:
+            self.async_update_listeners()
+
+    async def async_set(self, device: EchonetDevice, epc: int, edt: bytes) -> None:
+        """Write a property and read it back."""
+        client = self.network.client
         try:
-            return await self.client.async_fetch()
-        except Exception as exc:  # noqa: BLE001
-            raise UpdateFailed(f"failed to fetch echonet data: {exc}") from exc
+            await client.set(device.host, device.eoj, {epc: edt})
+            device.values[epc] = await client.get_one(device.host, device.eoj, epc)
+        except EchonetTimeoutError as err:
+            raise HomeAssistantError(f"{device.host} did not respond") from err
+        except EchonetError as err:
+            raise HomeAssistantError(str(err)) from err
+        self.async_set_updated_data(dict(self.network.devices))
