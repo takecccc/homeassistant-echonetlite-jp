@@ -21,7 +21,8 @@ from .echonet.transport import EchonetTransport
 _LOGGER = logging.getLogger(__name__)
 
 
-def _schema(defaults: dict[str, Any]) -> vol.Schema:
+def _schema(defaults: dict[str, Any]) -> Any:
+    # Any: Home Assistant 2026 swaps voluptuous for probatio at runtime.
     return vol.Schema(
         {
             vol.Optional(

@@ -7,7 +7,9 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+from homeassistant.components.binary_sensor import (  # type: ignore[attr-defined]
+    BinarySensorDeviceClass,
+)
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
     PERCENTAGE,
@@ -221,7 +223,10 @@ def _property_specs(device: EchonetDevice, epc: int, language: str) -> list[Prop
                     platform=platform,
                     schema=schema,
                     device_class=device_class,
-                    entity_category=category,
+                    # Settable management properties belong in the config category.
+                    entity_category=(
+                        EntityCategory.CONFIG if settable and diagnostic else category
+                    ),
                     **common,
                 )
             ]

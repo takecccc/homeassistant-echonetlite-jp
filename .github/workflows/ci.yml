@@ -15,15 +15,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - run: uv sync --frozen
       - run: uv run ruff format --check custom_components scripts tests
       - run: uv run ruff check custom_components scripts tests
       - run: uv run mypy
       - run: uv run pytest
 
-  # The job above pins the oldest supported Home Assistant (uv.lock);
-  # this one runs the tests against the latest release.
+  # The oldest Home Assistant in hacs.json; keeps the code Python 3.12 compatible.
+  test-oldest-ha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install pytest-homeassistant-custom-component==0.13.195
+      - run: .venv/bin/python -c "import homeassistant.const as c; print(c.__version__)"
+      - run: .venv/bin/python -m pytest
+
+  # uv.lock pins the HA version used above; this follows new releases.
   test-latest-ha:
     runs-on: ubuntu-latest
     steps:

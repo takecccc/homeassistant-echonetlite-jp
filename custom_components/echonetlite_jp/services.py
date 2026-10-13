@@ -52,8 +52,10 @@ def _edt(value: Any) -> bytes:
 
 
 _BASE = {vol.Required(ATTR_DEVICE_ID): cv.string, vol.Required(ATTR_EPC): _epc}
-GET_SCHEMA = vol.Schema(_BASE)
-SET_SCHEMA = vol.Schema({**_BASE, vol.Required(ATTR_EDT): _edt})
+# Typed as Any: Home Assistant 2026 replaces voluptuous with probatio at runtime
+# (homeassistant/__init__.py), so the static voluptuous types do not match.
+GET_SCHEMA: Any = vol.Schema(_BASE)
+SET_SCHEMA: Any = vol.Schema({**_BASE, vol.Required(ATTR_EDT): _edt})
 
 
 @callback

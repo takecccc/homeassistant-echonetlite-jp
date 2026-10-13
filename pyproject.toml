@@ -3,7 +3,7 @@ name = "homeassistant-echonetlite-jp"
 version = "1.0.0"
 description = "Home Assistant custom integration for ECHONET Lite devices, driven by the ECHONET MRA"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14.2"
 license = "Apache-2.0"
 dependencies = []
 
@@ -13,7 +13,7 @@ package = false
 [dependency-groups]
 dev = [
     "mypy>=2.4.0",
-    "pytest-homeassistant-custom-component>=0.13.180",
+    "pytest-homeassistant-custom-component>=0.13.372",
     "ruff>=0.8",
 ]
 
@@ -24,6 +24,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+# Home Assistant 2024.12 runs on Python 3.12: keep the integration compatible.
 target-version = "py312"
 extend-exclude = ["custom_components/echonetlite_jp/mra_data"]
 
@@ -40,7 +41,7 @@ ignore = [
 "custom_components/echonetlite_jp/echonet/manufacturers.py" = ["E501"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 ignore_missing_imports = true
 files = ["custom_components/echonetlite_jp"]

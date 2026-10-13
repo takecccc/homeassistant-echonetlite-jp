@@ -159,3 +159,11 @@ def test_unknown_class_keeps_super_class_properties() -> None:
     specs = _specs(device)
     assert specs["80"].platform is Platform.BINARY_SENSOR
     assert specs["88"].device_class == "problem"
+
+
+def test_settable_management_switch_is_config() -> None:
+    # 0x93 remote control setting on a meter: settable, but not the main function
+    device = _device("028001", {0x80: b"\x30", 0x93: b"\x41"}, settable=frozenset({0x93}))
+    spec = _specs(device)["93"]
+    assert spec.platform is Platform.SWITCH
+    assert spec.entity_category == EntityCategory.CONFIG

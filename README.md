@@ -115,7 +115,7 @@ uv run ruff check custom_components scripts tests
 uv run mypy                                        # 型チェック (strict)
 ```
 
-`uv.lock` は対応する最も古い Home Assistant (2024.12) に固定しています。CI ではこれに加えて最新の Home Assistant でもテストし、週に一度定期実行します。
+開発環境は Python 3.14 です（`uv.lock` は Home Assistant 2026.10 に固定）。統合のコードは、対応する最も古い Home Assistant 2024.12 が動く Python 3.12 でも動く書き方を保ちます（ruff の `target-version = "py312"`）。CI では、ロックした環境、Home Assistant 2024.12、その時点で最新の Home Assistant の3つでテストし、週に一度定期実行します。
 
 ### 構成
 
