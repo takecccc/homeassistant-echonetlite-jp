@@ -8,12 +8,12 @@ from collections import defaultdict
 from dataclasses import replace
 
 from .classes import extension_for
-from .client import EPC_INSTANCE_LIST_NOTIFICATION, EchonetClient, EchonetError
+from .client import EPC_INSTANCE_LIST_NOTIFICATION, EchonetClient
 from .device import EchonetDevice
+from .errors import EchonetError, EchonetTimeoutError
 from .mra import MraCatalog
 from .protocol import Frame
 from .quirks import DeviceKey
-from .transport import EchonetTimeoutError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,6 +77,9 @@ class EchonetNetwork:
         except EchonetTimeoutError:
             if device.available:
                 _LOGGER.info("%s (%s) stopped responding", device.id, device.host)
+                # It may have a new address (DHCP); look for it on the network.
+                if not self._hosts:
+                    self.rediscovery_requested = True
             device.available = False
             return
         for epc in result.missing:
@@ -87,7 +90,9 @@ class EchonetNetwork:
         device.available = True
         if device.extension is not None:
             try:
-                device.derived = await device.extension.async_poll(self.client, device)
+                # Values the extension could not read this time keep their
+                # previous state instead of flickering to unknown.
+                device.derived.update(await device.extension.async_poll(self.client, device))
             except EchonetError as err:
                 _LOGGER.debug("%s: extension poll failed: %s", device.id, err)
 
@@ -119,7 +124,7 @@ class EchonetNetwork:
     async def _discover_host(self, host: str) -> list[EchonetDevice]:
         try:
             node = await self.client.get_node(host)
-        except (EchonetError, EchonetTimeoutError) as err:
+        except EchonetError as err:
             _LOGGER.warning("cannot read node profile of %s: %s", host, err)
             return []
         devices: list[EchonetDevice] = []
@@ -128,7 +133,7 @@ class EchonetNetwork:
                 continue
             try:
                 info = await self.client.get_object(host, eoj)
-            except (EchonetError, EchonetTimeoutError) as err:
+            except EchonetError as err:
                 _LOGGER.warning("cannot read %s on %s: %s", eoj, host, err)
                 continue
             uid = node.uid or info.uid

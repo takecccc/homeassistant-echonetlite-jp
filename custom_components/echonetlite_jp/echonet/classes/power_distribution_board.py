@@ -13,9 +13,9 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..client import EchonetError
 from ..codec import CodecError, decode, primary
 from ..device import DerivedSensor, EchonetDevice
+from ..errors import EchonetError
 from ..mra import ClassDef, Text
 
 if TYPE_CHECKING:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -11,12 +11,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, REDISCOVERY_INTERVAL
-from .echonet.client import EchonetError
+from .const import DOMAIN, REDISCOVERY_COOLDOWN, REDISCOVERY_INTERVAL
 from .echonet.device import EchonetDevice
+from .echonet.errors import EchonetError, EchonetTimeoutError
 from .echonet.network import EchonetNetwork
 from .echonet.protocol import Frame
-from .echonet.transport import EchonetTimeoutError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +43,7 @@ class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
         )
         self.network = network
         self._next_discovery = dt_util.utcnow()
+        self._last_discovery: datetime | None = None
 
     @property
     def language(self) -> str:
@@ -51,7 +51,10 @@ class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
 
     async def _async_update_data(self) -> dict[str, EchonetDevice]:
         now = dt_util.utcnow()
-        if now >= self._next_discovery or self.network.rediscovery_requested:
+        requested = self.network.rediscovery_requested and (
+            self._last_discovery is None or now - self._last_discovery >= REDISCOVERY_COOLDOWN
+        )
+        if now >= self._next_discovery or requested:
             try:
                 new = await self.network.async_discover()
             except OSError as err:
@@ -60,6 +63,7 @@ class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
                 _LOGGER.debug(
                     "found %s at %s (%s)", device.id, device.host, device.class_def.name.en
                 )
+            self._last_discovery = now
             self._next_discovery = now + REDISCOVERY_INTERVAL
         if not self.network.devices:
             # Try again on the next poll instead of waiting for the interval.

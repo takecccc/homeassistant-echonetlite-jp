@@ -19,10 +19,9 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .coordinator import EchonetCoordinator
-from .echonet.client import EchonetError
 from .echonet.codec import EnumValue
 from .echonet.device import EchonetDevice
-from .echonet.transport import EchonetTimeoutError
+from .echonet.errors import EchonetError
 
 SERVICE_GET_PROPERTY = "get_property"
 SERVICE_SET_PROPERTY = "set_property"
@@ -64,7 +63,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         epc: int = call.data[ATTR_EPC]
         try:
             edt = await coordinator.network.client.get_one(device.host, device.eoj, epc)
-        except (EchonetError, EchonetTimeoutError) as err:
+        except EchonetError as err:
             raise HomeAssistantError(f"GET 0x{epc:02X} failed: {err}") from err
         device.values[epc] = edt
         prop = device.class_def.get(epc)

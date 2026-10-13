@@ -8,6 +8,7 @@ import socket
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+from .errors import EchonetTimeoutError
 from .protocol import (
     CONTROLLER,
     ECHONET_PORT,
@@ -22,10 +23,6 @@ from .protocol import (
 _LOGGER = logging.getLogger(__name__)
 
 NotificationListener = Callable[[str, Frame], None]
-
-
-class EchonetTimeoutError(TimeoutError):
-    """No response arrived in time."""
 
 
 @dataclass

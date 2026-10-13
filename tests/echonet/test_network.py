@@ -127,3 +127,64 @@ async def test_user_defined_objects_are_skipped(
     assert [str(d.eoj) for d in await network.async_discover()] == ["028701"]
     network = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST], include_user_defined=True)
     assert len(await network.async_discover()) == 2
+
+
+async def test_extension_timeout_does_not_fail_the_poll(
+    echonet: EchonetClient, fake_node: FakeNode
+) -> None:
+    fake_node.objects[PDB] = _pdb(2)
+    network = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    [device] = await network.async_discover()
+    fake_node.ignored_epcs = {0xB7}
+    await network.async_poll()
+    assert device.available
+    assert device.decode(0xC0) == 0.5
+    assert device.derived["ch2_energy"] == 20.0
+    assert "ch2_power" not in device.derived
+
+    fake_node.ignored_epcs = set()
+    await network.async_poll()
+    fake_node.ignored_epcs = {0xB7}
+    await network.async_poll()
+    assert device.derived["ch2_power"] == 20  # kept from the previous poll
+
+
+async def test_lost_device_requests_rediscovery_in_multicast_mode(
+    echonet: EchonetClient, fake_node: FakeNode
+) -> None:
+    fake_node.objects[PDB] = _pdb(1)
+    fixed = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    await fixed.async_discover()
+    fake_node.silent = True
+    await fixed.async_poll()
+    assert not fixed.rediscovery_requested  # fixed addresses cannot move
+
+    fake_node.silent = False
+    multicast = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    await multicast.async_discover()
+    multicast._hosts = []  # behave like auto-discovery from here on
+    fake_node.silent = True
+    await multicast.async_poll()
+    assert multicast.rediscovery_requested
+
+
+async def test_device_moves_to_a_new_address(echonet: EchonetClient, fake_node: FakeNode) -> None:
+    fake_node.objects[PDB] = _pdb(1)
+    network = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    [device] = await network.async_discover()
+
+    # The node comes back on another address (DHCP) with the same UID.
+    fake_node.stop()
+    moved = FakeNode({PDB: _pdb(1)})
+    await moved.start("127.0.0.3", fake_node.port)
+    try:
+        await network.async_poll()
+        assert not device.available
+        network._hosts = ["127.0.0.3"]
+        assert await network.async_discover() == []
+        assert network.devices[device.id] is device
+        assert device.host == "127.0.0.3"
+        await network.async_poll()
+        assert device.available
+    finally:
+        moved.stop()

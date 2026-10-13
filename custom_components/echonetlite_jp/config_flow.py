@@ -14,8 +14,9 @@ from homeassistant.helpers import selector
 
 from .const import CONF_HOSTS, CONF_INTERFACE, DEFAULT_SCAN_INTERVAL, DISCOVERY_WAIT, DOMAIN
 from .coordinator import EchonetConfigEntry
-from .echonet.client import EchonetClient, EchonetError
-from .echonet.transport import EchonetTimeoutError, EchonetTransport
+from .echonet.client import EchonetClient
+from .echonet.errors import EchonetError
+from .echonet.transport import EchonetTransport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ async def async_probe(hosts: list[str], interface: str) -> int:
             try:
                 await client.get_node(host)
                 found += 1
-            except (EchonetError, EchonetTimeoutError):
+            except EchonetError:
                 _LOGGER.debug("no ECHONET Lite node at %s", host)
         return found
     finally:

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from .errors import EchonetError, EchonetRequestRejected, EchonetTimeoutError
 from .manufacturers import MANUFACTURERS
 from .protocol import (
     EOJ,
@@ -16,7 +18,7 @@ from .protocol import (
     decode_instance_list,
     decode_property_map,
 )
-from .transport import EchonetTimeoutError, EchonetTransport
+from .transport import EchonetTransport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,18 +36,6 @@ IDENTIFICATION_EPCS = frozenset(
     {EPC_UID, EPC_MANUFACTURER, EPC_PRODUCT_CODE, EPC_SERIAL_NUMBER, 0x82, 0x8B}
 )
 PROPERTY_MAP_EPCS = frozenset({EPC_INF_MAP, EPC_SET_MAP, EPC_GET_MAP})
-
-
-class EchonetError(Exception):
-    """Base class for request failures."""
-
-
-class EchonetRequestRejected(EchonetError):
-    """The node answered with an error service code (…_SNA)."""
-
-    def __init__(self, message: str, rejected: Iterable[int]) -> None:
-        super().__init__(message)
-        self.rejected = frozenset(rejected)
 
 
 @dataclass(frozen=True)
@@ -88,13 +78,28 @@ class EchonetClient:
         transport: EchonetTransport,
         *,
         timeout: float = 3.0,
-        retries: int = 1,
+        min_timeout: float = 0.3,
+        retries: int = 2,
         max_properties: int = 24,
     ) -> None:
         self.transport = transport
         self._timeout = timeout
+        self._min_timeout = min(min_timeout, timeout)
         self._retries = retries
         self._max_properties = max(1, max_properties)
+        self._rtt: dict[str, _RoundTrip] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def timeout_for(self, host: str) -> float:
+        """Timeout for a first attempt, learned from the host's response times.
+
+        Wired nodes typically answer in milliseconds but occasionally drop a
+        request; waiting the full timeout each time would stall polling.
+        """
+        rtt = self._rtt.get(host)
+        if rtt is None:
+            return self._timeout
+        return min(self._timeout, max(self._min_timeout, rtt.timeout))
 
     async def discover(self, wait: float = 2.0) -> list[str]:
         """Return hosts that answer a multicast instance-list request."""
@@ -212,14 +217,44 @@ class EchonetClient:
             )
 
     async def _request(self, host: str, eoj: EOJ, esv: ESV, props: list[Property]) -> Frame:
-        for attempt in range(self._retries + 1):
-            try:
-                return await self.transport.request(host, eoj, esv, props, timeout=self._timeout)
-            except EchonetTimeoutError:
-                if attempt == self._retries:
-                    raise
-                _LOGGER.debug("retrying %s %s %s", host, eoj, esv.name)
+        # One outstanding request per node: many nodes cannot handle more, and
+        # it keeps writes from interleaving with a poll.
+        async with self._locks.setdefault(host, asyncio.Lock()):
+            loop = asyncio.get_running_loop()
+            for attempt in range(self._retries + 1):
+                # Back off on retries in case the node is slower than learned.
+                timeout = min(self._timeout, self.timeout_for(host) * 2**attempt)
+                started = loop.time()
+                try:
+                    frame = await self.transport.request(host, eoj, esv, props, timeout=timeout)
+                except EchonetTimeoutError:
+                    if attempt == self._retries:
+                        raise
+                    _LOGGER.debug("no response from %s %s in %.1fs; retrying", host, eoj, timeout)
+                    continue
+                self._rtt.setdefault(host, _RoundTrip()).update(loop.time() - started)
+                return frame
         raise AssertionError("unreachable")
+
+
+@dataclass
+class _RoundTrip:
+    """Smoothed round-trip time estimate (RFC 6298)."""
+
+    srtt: float | None = None
+    rttvar: float = 0.0
+
+    def update(self, sample: float) -> None:
+        if self.srtt is None:
+            self.srtt, self.rttvar = sample, sample / 2
+        else:
+            self.rttvar = 0.75 * self.rttvar + 0.25 * abs(self.srtt - sample)
+            self.srtt = 0.875 * self.srtt + 0.125 * sample
+
+    @property
+    def timeout(self) -> float:
+        assert self.srtt is not None
+        return self.srtt + 4 * self.rttvar
 
 
 def manufacturer_code(edt: bytes | None) -> int | None:

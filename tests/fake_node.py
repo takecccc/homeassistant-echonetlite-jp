@@ -48,6 +48,11 @@ class FakeNode(asyncio.DatagramProtocol):
         self.max_properties: int | None = None  # drop requests with more properties
         self.silent = False
         self.reject_multi = False  # answer multi-property GETs with an empty Get_SNA
+        self.drop = 0  # silently drop this many upcoming requests
+        self.ignored_epcs: set[int] = set()  # never answer requests for these
+        self.delay = 0.0  # seconds before answering
+        self.in_flight = 0
+        self.max_in_flight = 0
         self.requests: list[Frame] = []
         self._transport: asyncio.DatagramTransport | None = None
         self.port = 0
@@ -73,13 +78,26 @@ class FakeNode(asyncio.DatagramProtocol):
         self.requests.append(frame)
         if self.silent:
             return
+        if any(p.epc in self.ignored_epcs for p in frame.properties):
+            return
+        if self.drop > 0:
+            self.drop -= 1
+            return
         if self.max_properties is not None and len(frame.properties) > self.max_properties:
             return
         obj = self._node_profile() if frame.deoj == NODE_PROFILE else self.objects.get(frame.deoj)
         if obj is None:
             return
         reply = self._handle(obj, frame)
-        if reply is not None and self._transport is not None:
+        if reply is None:
+            return
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        asyncio.get_running_loop().call_later(self.delay, self._reply, reply, addr)
+
+    def _reply(self, reply: Frame, addr: tuple[str, int]) -> None:
+        self.in_flight -= 1
+        if self._transport is not None:
             self._transport.sendto(reply.encode(), addr)
 
     def _handle(self, obj: FakeObject, frame: Frame) -> Frame | None:

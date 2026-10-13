@@ -13,7 +13,7 @@ from .fake_node import FAKE_HOST, FakeNode
 
 @pytest.fixture
 def loopback_sockets(socket_enabled: None) -> None:
-    socket_allow_hosts(["127.0.0.1", FAKE_HOST])
+    socket_allow_hosts(["127.0.0.1", FAKE_HOST, "127.0.0.3"])
 
 
 @pytest.fixture

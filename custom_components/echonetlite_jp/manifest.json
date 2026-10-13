@@ -1,13 +1,14 @@
 {
   "domain": "echonetlite_jp",
   "name": "ECHONET Lite JP",
-  "codeowners": ["@takecccc"],
+  "codeowners": [
+    "@takecccc"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/takecccc/homeassistant-echonetlite-jp",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/takecccc/homeassistant-echonetlite-jp/issues",
-  "loggers": ["custom_components.echonetlite_jp"],
   "requirements": [],
   "single_config_entry": true,
   "version": "1.0.0"

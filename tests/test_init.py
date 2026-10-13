@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -211,3 +213,20 @@ async def test_quirks(hass: HomeAssistant, fake_node: FakeNode, tmp_path: Path) 
     room = ent_reg.async_get("sensor.home_air_conditioner_room_temperature")
     assert room.disabled_by is er.RegistryEntryDisabler.INTEGRATION
     assert ent_reg.async_get("select.home_air_conditioner_operation_mode") is None
+
+
+async def test_requested_rediscovery_is_rate_limited(
+    hass: HomeAssistant, fake_node: FakeNode
+) -> None:
+    entry = await setup_integration(hass, fake_node)
+    coordinator = entry.runtime_data
+    network = coordinator.network
+    with patch.object(network, "async_discover", wraps=network.async_discover) as discover:
+        network.rediscovery_requested = True
+        await coordinator.async_refresh()
+        assert discover.call_count == 0  # just discovered during setup
+
+        coordinator._last_discovery -= timedelta(minutes=6)
+        await coordinator.async_refresh()
+        assert discover.call_count == 1
+        assert not network.rediscovery_requested

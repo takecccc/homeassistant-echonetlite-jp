@@ -23,14 +23,15 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "custom_components" / "echonetlite_jp")
 )
 
-from echonet.client import EchonetClient, EchonetError
+from echonet.client import EchonetClient
 from echonet.codec import EnumValue
 from echonet.device import EchonetDevice
+from echonet.errors import EchonetError
 from echonet.mra import MraCatalog
 from echonet.network import EchonetNetwork
 from echonet.protocol import EOJ
 from echonet.quirks import DeviceKey
-from echonet.transport import EchonetTimeoutError, EchonetTransport
+from echonet.transport import EchonetTransport
 
 
 def main() -> int:
@@ -64,7 +65,7 @@ def main() -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING)
     try:
         return asyncio.run(_run(args))
-    except (EchonetError, EchonetTimeoutError, OSError) as err:
+    except (EchonetError, OSError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
 
