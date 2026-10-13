@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.echonetlite_jp.const import CONF_HOSTS, CONF_INTERFACE, DOMAIN
@@ -16,7 +17,7 @@ from custom_components.echonetlite_jp.echonet.mra import MraCatalog
 from custom_components.echonetlite_jp.echonet.protocol import EOJ
 from custom_components.echonetlite_jp.echonet.transport import EchonetTransport
 
-from .fake_node import FAKE_HOST, FakeNode, FakeObject
+from .fake_node import FAKE_HOST, FAKE_UID, FakeNode, FakeObject
 
 AIRCON = EOJ(0x01, 0x30, 0x01)
 PDB = EOJ(0x02, 0x87, 0x01)
@@ -88,3 +89,13 @@ async def setup_integration(
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     return entry
+
+
+def aircon_device(hass: HomeAssistant) -> dr.DeviceEntry:
+    """The registry entry of the fake air conditioner."""
+    # Lookup API that is stable across Home Assistant versions
+    # (async_get_device was deprecated in 2026).
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    identifier = (DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")
+    devices = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    return next(device for device in devices if identifier in device.identifiers)

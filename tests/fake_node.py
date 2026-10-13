@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from custom_components.echonetlite_jp.echonet.protocol import (
     EOJ,
@@ -42,6 +43,9 @@ class FakeObject:
 
 
 class FakeNode(asyncio.DatagramProtocol):
+    # Started nodes, stopped after each test by the conftest fixture.
+    running: ClassVar[list[FakeNode]] = []
+
     def __init__(self, objects: dict[EOJ, FakeObject], *, uid: bytes = FAKE_UID) -> None:
         self.objects = objects
         self.uid = uid
@@ -61,12 +65,14 @@ class FakeNode(asyncio.DatagramProtocol):
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(lambda: self, local_addr=(host, port))
         self._transport = transport
+        FakeNode.running.append(self)
         self.port = transport.get_extra_info("sockname")[1]
         return self.port
 
     def stop(self) -> None:
         if self._transport is not None:
             self._transport.close()
+            self._transport = None
 
     def notify(self, eoj: EOJ, epc: int, edt: bytes, addr: tuple[str, int]) -> None:
         assert self._transport is not None

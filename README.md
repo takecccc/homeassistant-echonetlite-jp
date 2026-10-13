@@ -115,6 +115,8 @@ uv run ruff check custom_components scripts tests
 uv run mypy                                        # 型チェック (strict)
 ```
 
+`uv.lock` は対応する最も古い Home Assistant (2024.12) に固定しています。CI ではこれに加えて最新の Home Assistant でもテストし、週に一度定期実行します。
+
 ### 構成
 
 ```

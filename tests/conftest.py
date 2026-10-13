@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from pytest_socket import socket_allow_hosts
@@ -9,6 +9,13 @@ from custom_components.echonetlite_jp.echonet.client import EchonetClient
 from custom_components.echonetlite_jp.echonet.transport import EchonetTransport
 
 from .fake_node import FAKE_HOST, FakeNode
+
+
+@pytest.fixture(autouse=True)
+def stop_fake_nodes() -> Iterator[None]:
+    yield
+    while FakeNode.running:
+        FakeNode.running.pop().stop()
 
 
 @pytest.fixture

@@ -12,15 +12,14 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.echonetlite_jp import async_migrate_entry
 from custom_components.echonetlite_jp.const import DOMAIN
 
-from .fake_node import FAKE_UID, FakeNode
-from .helpers import AIRCON, PDB, aircon, board, setup_integration
+from .fake_node import FakeNode
+from .helpers import AIRCON, PDB, aircon, aircon_device, board, setup_integration
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations", "loopback_sockets")
 
@@ -67,7 +66,7 @@ async def test_entities(hass: HomeAssistant, fake_node: FakeNode) -> None:
     vendor = ent_reg.async_get("sensor.home_air_conditioner_epc_f5")
     assert vendor.disabled_by is er.RegistryEntryDisabler.INTEGRATION
 
-    device = dr.async_get(hass).async_get_device({(DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")})
+    device = aircon_device(hass)
     assert device.manufacturer == "Panasonic"
     assert device.model_id == "CS-X400D"
 
@@ -144,7 +143,7 @@ async def test_notification(hass: HomeAssistant, fake_node: FakeNode) -> None:
 
 async def test_services(hass: HomeAssistant, fake_node: FakeNode) -> None:
     await setup_integration(hass, fake_node)
-    device = dr.async_get(hass).async_get_device({(DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")})
+    device = aircon_device(hass)
 
     response = await hass.services.async_call(
         DOMAIN,
@@ -266,7 +265,7 @@ async def test_service_validation(
     hass: HomeAssistant, fake_node: FakeNode, data: dict, error: str
 ) -> None:
     await setup_integration(hass, fake_node)
-    device = dr.async_get(hass).async_get_device({(DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")})
+    device = aircon_device(hass)
     with pytest.raises(vol.Invalid, match=error):
         await hass.services.async_call(
             DOMAIN,
@@ -294,7 +293,7 @@ async def test_service_validation(
 
 async def test_service_reports_rejected_set(hass: HomeAssistant, fake_node: FakeNode) -> None:
     await setup_integration(hass, fake_node)
-    device = dr.async_get(hass).async_get_device({(DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")})
+    device = aircon_device(hass)
     with pytest.raises(HomeAssistantError, match="rejected"):
         await hass.services.async_call(
             DOMAIN,
