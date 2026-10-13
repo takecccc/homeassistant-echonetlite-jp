@@ -27,6 +27,14 @@ async def test_discover_collects_responses(echonet: EchonetClient) -> None:
         assert await echonet.discover(wait=0.2) == [FAKE_HOST]
 
 
+async def test_discover_repeats_lost_multicast(echonet: EchonetClient, fake_node: FakeNode) -> None:
+    fake_node.drop = 1  # the first copy of the request is lost
+    with patch(f"{TRANSPORT}.MULTICAST_ADDRESS", FAKE_HOST):
+        assert await echonet.discover(wait=0.3, sends=3) == [FAKE_HOST]
+    assert len(fake_node.requests) == 3
+    assert len({frame.tid for frame in fake_node.requests}) == 1
+
+
 async def test_infc_is_acknowledged_and_forwarded(
     echonet: EchonetClient, fake_node: FakeNode
 ) -> None:

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 CHANNEL_EPCS = frozenset(range(0xD0, 0xF0))
+_MAX_CHANNELS = 252  # upper bound of the channel count properties in the MRA
 _KEY_RE = re.compile(r"^(ch|duplex)(\d+)_([a-z_]+)$")
 
 
@@ -112,8 +113,16 @@ class PowerDistributionBoard:
         return out
 
     def sensors(self, device: EchonetDevice) -> list[DerivedSensor]:
+        """Sensors for every channel the board reports, read or not.
+
+        Channels come from the channel counts (0xB1/0xB8) so that the entities
+        exist from the start even when a lossy list read has not succeeded yet;
+        channels seen in readings are added too, for boards without counts.
+        """
+        keys = dict.fromkeys(self._expected_keys(device))
+        keys.update(dict.fromkeys(k for k in device.derived if _KEY_RE.match(k)))
         out: list[DerivedSensor] = []
-        for key in device.derived:
+        for key in keys:
             match = _KEY_RE.match(key)
             if not match or (fld := _FIELDS.get((match[1], match[3]))) is None:
                 continue
@@ -130,6 +139,19 @@ class PowerDistributionBoard:
                 )
             )
         return out
+
+    @staticmethod
+    def _expected_keys(device: EchonetDevice) -> list[str]:
+        keys: list[str] = []
+        for lst in _LISTS:
+            if lst.list_epc not in device.info.maps.get:
+                continue
+            count = device.decode(lst.count_epc)
+            if not isinstance(count, int):
+                continue
+            for channel in range(1, min(count, _MAX_CHANNELS) + 1):
+                keys.extend(f"{lst.prefix}{channel}_{fld.key}" for fld in lst.fields)
+        return keys
 
 
 async def _read_list(

@@ -188,3 +188,22 @@ async def test_device_moves_to_a_new_address(echonet: EchonetClient, fake_node: 
         assert device.available
     finally:
         moved.stop()
+
+
+async def test_channel_sensors_exist_before_lists_are_read(
+    echonet: EchonetClient, fake_node: FakeNode
+) -> None:
+    fake_node.objects[PDB] = _pdb(3)
+    fake_node.ignored_epcs = {0xB3, 0xB7}  # list reads keep failing
+    network = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    [device] = await network.async_discover()
+    await network.async_poll()
+    assert device.derived == {}
+    assert device.extension is not None
+    keys = {sensor.key for sensor in device.extension.sensors(device)}
+    assert keys == {f"ch{n}_{kind}" for n in (1, 2, 3) for kind in ("energy", "power")}
+
+    fake_node.ignored_epcs = set()
+    await network.async_poll()
+    assert device.derived["ch3_power"] == 30
+    assert {sensor.key for sensor in device.extension.sensors(device)} == keys

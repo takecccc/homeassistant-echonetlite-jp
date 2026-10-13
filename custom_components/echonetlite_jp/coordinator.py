@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, REDISCOVERY_COOLDOWN, REDISCOVERY_INTERVAL
+from .const import DOMAIN, REDISCOVERY_COOLDOWN, REDISCOVERY_INTERVAL, STARTUP_REDISCOVERY
 from .echonet.device import EchonetDevice
 from .echonet.errors import EchonetError, EchonetTimeoutError
 from .echonet.network import EchonetNetwork
@@ -63,8 +63,9 @@ class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
                 _LOGGER.debug(
                     "found %s at %s (%s)", device.id, device.host, device.class_def.name.en
                 )
+            interval = STARTUP_REDISCOVERY if self._last_discovery is None else REDISCOVERY_INTERVAL
             self._last_discovery = now
-            self._next_discovery = now + REDISCOVERY_INTERVAL
+            self._next_discovery = now + interval
         if not self.network.devices:
             # Try again on the next poll instead of waiting for the interval.
             self._next_discovery = now

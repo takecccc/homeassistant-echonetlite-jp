@@ -301,3 +301,28 @@ async def test_service_reports_rejected_set(hass: HomeAssistant, fake_node: Fake
             {"device_id": device.id, "epc": "0xBB", "edt": "10"},
             blocking=True,
         )
+
+
+async def test_channel_sensors_are_created_before_values_arrive(
+    hass: HomeAssistant, fake_node: FakeNode
+) -> None:
+    fake_node.ignored_epcs = {0xB3, 0xB7}
+    entry = await setup_integration(hass, fake_node)
+    state = hass.states.get("sensor.power_distribution_board_metering_ch2_energy")
+    assert state is not None and state.state == "unknown"
+
+    fake_node.ignored_epcs = set()
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.power_distribution_board_metering_ch2_energy").state == "20.0"
+
+
+async def test_early_rediscovery_after_startup(hass: HomeAssistant, fake_node: FakeNode) -> None:
+    entry = await setup_integration(hass, fake_node)
+    coordinator = entry.runtime_data
+    assert coordinator._last_discovery is not None
+    assert coordinator._next_discovery - coordinator._last_discovery == timedelta(minutes=2)
+
+    coordinator._next_discovery = coordinator._last_discovery  # due now
+    await coordinator.async_refresh()
+    assert coordinator._next_discovery - coordinator._last_discovery == timedelta(minutes=30)

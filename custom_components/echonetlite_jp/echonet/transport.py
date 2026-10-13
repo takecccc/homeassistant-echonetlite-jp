@@ -104,21 +104,39 @@ class EchonetTransport(asyncio.DatagramProtocol):
             self._pending.pop(tid, None)
 
     async def multicast(
-        self, deoj: EOJ, esv: ESV, properties: Iterable[Property], *, wait: float
+        self,
+        deoj: EOJ,
+        esv: ESV,
+        properties: Iterable[Property],
+        *,
+        wait: float,
+        sends: int = 1,
     ) -> list[tuple[str, Frame]]:
-        """Send to the multicast group and collect every response within ``wait``."""
+        """Send to the multicast group and collect every response within ``wait``.
+
+        With ``sends`` > 1 the request is repeated (same TID) at even intervals
+        within ``wait``; UDP multicast is lossy and nodes do not retransmit.
+        Responses to any copy are collected until the end, so a node may
+        appear more than once.
+        """
         tid, pending = self._register(None)
+        frame = Frame(tid, self._source, deoj, esv, tuple(properties))
         responses: list[tuple[str, Frame]] = []
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        send_times = [start + wait * i / sends for i in range(max(1, sends))]
+        deadline = start + wait
         try:
-            self._send(MULTICAST_ADDRESS, Frame(tid, self._source, deoj, esv, tuple(properties)))
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + wait
-            while (remaining := deadline - loop.time()) > 0:
+            while (now := loop.time()) < deadline:
+                while send_times and send_times[0] <= now:
+                    send_times.pop(0)
+                    self._send(MULTICAST_ADDRESS, frame)
+                until = min(deadline, send_times[0]) if send_times else deadline
                 try:
-                    async with asyncio.timeout(remaining):
+                    async with asyncio.timeout(max(0.0, until - now)):
                         item = await pending.queue.get()
                 except TimeoutError:
-                    break
+                    continue
                 if item[1] is _CLOSED:
                     break
                 responses.append(item)

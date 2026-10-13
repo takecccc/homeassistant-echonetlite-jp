@@ -104,10 +104,14 @@ class EchonetClient:
             return self._initial_timeout
         return min(self._timeout, max(self._min_timeout, rtt.timeout))
 
-    async def discover(self, wait: float = 2.0) -> list[str]:
-        """Return hosts that answer a multicast instance-list request."""
+    async def discover(self, wait: float = 3.0, sends: int = 3) -> list[str]:
+        """Return hosts that answer a multicast instance-list request.
+
+        The request is sent ``sends`` times: on a real network a single
+        multicast misses a given node roughly one time in eight.
+        """
         responses = await self.transport.multicast(
-            NODE_PROFILE, ESV.GET, [Property(EPC_INSTANCE_LIST)], wait=wait
+            NODE_PROFILE, ESV.GET, [Property(EPC_INSTANCE_LIST)], wait=wait, sends=sends
         )
         return sorted({host for host, _ in responses}, key=_host_sort_key)
 
