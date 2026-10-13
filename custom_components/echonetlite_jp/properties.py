@@ -24,9 +24,9 @@ from homeassistant.const import (
 )
 from homeassistant.util import dt as dt_util
 
-from .echonet.codec import EnumValue, Schema, enum_values, is_binary_state, primary
+from .echonet.codec import EnumValue, enum_values, is_binary_state, primary
 from .echonet.device import DerivedSensor, EchonetDevice
-from .echonet.mra import PropertyDef
+from .echonet.mra import PropertyDef, Schema
 
 EPC_OPERATION_STATUS = 0x80
 EPC_INSTALLATION_LOCATION = 0x81
@@ -35,6 +35,9 @@ EPC_FAULT_STATUS = 0x88
 # Super class properties (0x80-0x9F) that are about the device's management
 # rather than what it measures or controls.
 _PRIMARY_SUPER_EPCS = frozenset({0x80, 0x84, 0x85, 0x88, 0x8F})
+# The device's own clock (current time/date) changes every minute and is rarely
+# useful; registered disabled unless a quirk says otherwise.
+_CLOCK_EPCS = frozenset({0x97, 0x98})
 _CLASS_WATER_METER = 0x0281
 _CLASS_GAS_METER = 0x0282
 
@@ -122,6 +125,8 @@ def device_specs(device: EchonetDevice, language: str) -> list[PropertySpec]:
     for epc in device.poll_epcs():
         prop = device.class_def.get(epc)
         hints = prop.hints if prop is not None else {}
+        if epc in _CLOCK_EPCS:
+            hints = {"enabled": False, **hints}
         specs.extend(_apply_hints(spec, hints) for spec in _property_specs(device, epc, language))
     if device.extension is not None:
         specs.extend(_derived_spec(sensor, language) for sensor in device.extension.sensors(device))

@@ -105,3 +105,35 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options == {"hosts": ["10.0.0.5"], "interface": "", "scan_interval": 15}
+
+
+async def test_probe_against_a_node(loopback_sockets: None) -> None:
+    """async_probe itself, against FakeNode (unicast and 'multicast')."""
+    from functools import partial
+
+    from custom_components.echonetlite_jp.config_flow import async_probe
+    from custom_components.echonetlite_jp.echonet.client import EchonetClient
+    from custom_components.echonetlite_jp.echonet.protocol import EOJ
+    from custom_components.echonetlite_jp.echonet.transport import EchonetTransport
+
+    from .fake_node import FAKE_HOST, FakeNode, FakeObject
+
+    node = FakeNode({EOJ(1, 0x30, 1): FakeObject({0x80: b"\x30"})})
+    port = await node.start()
+    transport = partial(EchonetTransport, bind_host="127.0.0.1", port=port, multicast=False)
+    client = partial(EchonetClient, timeout=0.2, retries=0)
+    try:
+        with (
+            patch("custom_components.echonetlite_jp.config_flow.EchonetTransport", transport),
+            patch("custom_components.echonetlite_jp.config_flow.EchonetClient", client),
+            patch("custom_components.echonetlite_jp.config_flow.DISCOVERY_WAIT", 0.2),
+            patch(
+                "custom_components.echonetlite_jp.echonet.transport.MULTICAST_ADDRESS", FAKE_HOST
+            ),
+        ):
+            assert await async_probe([FAKE_HOST], "") == 1
+            assert await async_probe([], "") == 1
+            node.silent = True
+            assert await async_probe([FAKE_HOST], "") == 0
+    finally:
+        node.stop()

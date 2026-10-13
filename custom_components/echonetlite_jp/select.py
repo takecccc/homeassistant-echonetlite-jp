@@ -31,7 +31,8 @@ class EchonetSelect(EchonetEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        return self.value
+        value = self.current_value
+        return value if isinstance(value, str) else None
 
     async def async_select_option(self, option: str) -> None:
         item = find_option(self.spec, option, self.coordinator.language)

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.echonetlite_jp.diagnostics import async_get_config_entry_diagnostics
 
-from .fake_node import FakeNode
+from .fake_node import FAKE_UID, FakeNode
 from .helpers import AIRCON, aircon, setup_integration
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations", "loopback_sockets")
@@ -21,6 +23,8 @@ async def test_diagnostics(hass: HomeAssistant, fake_node: FakeNode) -> None:
     diag = await async_get_config_entry_diagnostics(hass, entry)
     [device] = diag["devices"]
     assert device["eoj"] == "013001"
+    assert device["node"] == "node1"
+    assert FAKE_UID.hex().upper() not in json.dumps(diag)
     assert device["class"] == "Home air conditioner"
     assert device["values"]["0xBB"] == "19"
     assert "0xB3" in device["set_map"]

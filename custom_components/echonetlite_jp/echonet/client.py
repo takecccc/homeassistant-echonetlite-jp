@@ -78,12 +78,14 @@ class EchonetClient:
         transport: EchonetTransport,
         *,
         timeout: float = 3.0,
+        initial_timeout: float = 1.0,
         min_timeout: float = 0.3,
         retries: int = 2,
         max_properties: int = 24,
     ) -> None:
         self.transport = transport
         self._timeout = timeout
+        self._initial_timeout = min(initial_timeout, timeout)
         self._min_timeout = min(min_timeout, timeout)
         self._retries = retries
         self._max_properties = max(1, max_properties)
@@ -98,7 +100,8 @@ class EchonetClient:
         """
         rtt = self._rtt.get(host)
         if rtt is None:
-            return self._timeout
+            # Unknown node: start moderately; retries back off up to the full timeout.
+            return self._initial_timeout
         return min(self._timeout, max(self._min_timeout, rtt.timeout))
 
     async def discover(self, wait: float = 2.0) -> list[str]:

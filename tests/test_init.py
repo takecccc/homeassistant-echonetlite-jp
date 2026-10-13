@@ -7,9 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -230,3 +232,73 @@ async def test_requested_rediscovery_is_rate_limited(
         await coordinator.async_refresh()
         assert discover.call_count == 1
         assert not network.rediscovery_requested
+
+
+async def test_clock_properties_are_disabled_by_default(
+    hass: HomeAssistant, fake_node: FakeNode
+) -> None:
+    fake_node.objects[AIRCON].values[0x97] = bytes([12, 30])
+    await setup_integration(hass, fake_node)
+    clock = er.async_get(hass).async_get("sensor.home_air_conditioner_current_time_setting")
+    assert clock.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+
+
+async def test_unload_during_poll(hass: HomeAssistant, fake_node: FakeNode) -> None:
+    entry = await setup_integration(hass, fake_node)
+    coordinator = entry.runtime_data
+    fake_node.delay = 0.1
+    refresh = hass.async_create_task(coordinator.async_refresh())
+    await asyncio.sleep(0.02)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await refresh  # ends as a normal failed update, not an unexpected exception
+    assert not coordinator.last_update_success
+    await asyncio.sleep(0.15)  # let FakeNode's delayed reply fire
+
+
+@pytest.mark.parametrize(
+    ("data", "error"),
+    [
+        ({"epc": "0x10"}, "between 0x80 and 0xFF"),
+        ({"epc": "zz"}, "EPC must be hex"),
+    ],
+)
+async def test_service_validation(
+    hass: HomeAssistant, fake_node: FakeNode, data: dict, error: str
+) -> None:
+    await setup_integration(hass, fake_node)
+    device = dr.async_get(hass).async_get_device({(DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")})
+    with pytest.raises(vol.Invalid, match=error):
+        await hass.services.async_call(
+            DOMAIN,
+            "get_property",
+            {"device_id": device.id, **data},
+            blocking=True,
+            return_response=True,
+        )
+    with pytest.raises(vol.Invalid, match="EDT must be a hex string"):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_property",
+            {"device_id": device.id, "epc": "0x80", "edt": "xyz"},
+            blocking=True,
+        )
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            "get_property",
+            {"device_id": "missing", "epc": "0x80"},
+            blocking=True,
+            return_response=True,
+        )
+
+
+async def test_service_reports_rejected_set(hass: HomeAssistant, fake_node: FakeNode) -> None:
+    await setup_integration(hass, fake_node)
+    device = dr.async_get(hass).async_get_device({(DOMAIN, f"{FAKE_UID.hex().upper()}-{AIRCON}")})
+    with pytest.raises(HomeAssistantError, match="rejected"):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_property",
+            {"device_id": device.id, "epc": "0xBB", "edt": "10"},
+            blocking=True,
+        )

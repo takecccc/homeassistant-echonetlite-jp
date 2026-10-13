@@ -184,7 +184,7 @@ def _decode_level(schema: Schema, edt: bytes, _: CoefficientLookup | None) -> in
 def _decode_numeric_value(schema: Schema, edt: bytes, _: CoefficientLookup | None) -> float:
     for item in schema.get("enum") or []:
         if _parse_hex(item.get("edt")) == edt:
-            return item["numericValue"]
+            return float(item["numericValue"])
     raise CodecError(f"unknown numeric code {edt.hex()}")
 
 

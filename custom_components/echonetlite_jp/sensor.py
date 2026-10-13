@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -29,11 +29,13 @@ class EchonetSensor(EchonetEntity, SensorEntity):
     ) -> None:
         super().__init__(coordinator, device, spec)
         self._attr_native_unit_of_measurement = spec.unit
-        self._attr_device_class = spec.device_class
+        self._attr_device_class = (
+            SensorDeviceClass(spec.device_class) if spec.device_class else None
+        )
         self._attr_state_class = spec.state_class
         self._attr_suggested_display_precision = spec.precision
         self._attr_options = list(spec.options) if spec.options is not None else None
 
     @property
     def native_value(self) -> Any:
-        return self.value
+        return self.current_value

@@ -25,7 +25,8 @@ async def async_setup_entry(
 class EchonetSwitch(EchonetEntity, SwitchEntity):
     @property
     def is_on(self) -> bool | None:
-        return self.value
+        value = self.current_value
+        return value if isinstance(value, bool) else None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_write(True)

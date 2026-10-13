@@ -69,7 +69,10 @@ class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
             # Try again on the next poll instead of waiting for the interval.
             self._next_discovery = now
             raise UpdateFailed("no ECHONET Lite devices found")
-        await self.network.async_poll()
+        try:
+            await self.network.async_poll()
+        except EchonetError as err:  # e.g. the transport closed during unload
+            raise UpdateFailed(f"polling failed: {err}") from err
         return dict(self.network.devices)
 
     @callback

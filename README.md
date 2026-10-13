@@ -112,6 +112,7 @@ uv sync
 uv run pytest                                     # テスト（ループバック上の疑似機器と通信）
 uv run ruff format custom_components scripts tests
 uv run ruff check custom_components scripts tests
+uv run mypy                                        # 型チェック (strict)
 ```
 
 ### 構成

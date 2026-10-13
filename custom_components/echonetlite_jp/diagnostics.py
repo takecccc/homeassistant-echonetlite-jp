@@ -13,12 +13,16 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: EchonetConfigEntry
 ) -> dict[str, Any]:
     network = entry.runtime_data.network
+    # Node UIDs identify the physical unit; replace them with stable aliases.
+    aliases: dict[str, str] = {}
+    for device in network.devices.values():
+        aliases.setdefault(device.node_uid, f"node{len(aliases) + 1}")
     return {
         "options": dict(entry.options),
         "mra_version": await hass.async_add_executor_job(lambda: network.catalog.version),
         "devices": [
             {
-                "id": device.id,
+                "node": aliases[device.node_uid],
                 "host": device.host,
                 "eoj": str(device.eoj),
                 "class": device.class_def.name.en,

@@ -46,7 +46,7 @@ class EchonetEntity(CoordinatorEntity[EchonetCoordinator]):
         return super().available and self.device.available
 
     @property
-    def value(self) -> Any:
+    def current_value(self) -> Any:
         return read_value(self.device, self.spec, self.coordinator.language)
 
     @property

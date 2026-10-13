@@ -11,6 +11,7 @@ from custom_components.echonetlite_jp.echonet.codec import (
     decode_property,
     encode,
     enum_values,
+    fixed_size,
     is_binary_state,
     primary,
 )
@@ -123,3 +124,63 @@ def test_encode_state_by_label() -> None:
     assert encode(schema, "cooling") == cooling.edt
     with pytest.raises(CodecError):
         encode(schema, "no such mode")
+
+
+def test_level() -> None:
+    schema = primary(AIRCON.get(0xA0).schema)
+    assert schema["type"] == "level"
+    assert decode(schema, b"\x31") == 1
+    assert decode(schema, b"\x38") == 8
+    with pytest.raises(CodecError):
+        decode(schema, b"\x39")
+    assert encode(schema, 8) == b"\x38"
+    with pytest.raises(CodecError):
+        encode(schema, 9)
+
+
+def test_bitmap() -> None:
+    schema = primary(AIRCON.get(0xC6).schema)
+    value = decode(schema, b"\x01")
+    first = next(iter(value.values()))
+    assert isinstance(first, EnumValue)
+    with pytest.raises(CodecError):
+        decode(schema, b"\x01\x00")
+
+
+def test_date_time_and_raw() -> None:
+    assert decode({"type": "date-time"}, bytes.fromhex("07EA0A0D0C1E05")) == dt.datetime(
+        2026, 10, 13, 12, 30, 5
+    )
+    assert decode({"type": "date-time", "size": 6}, bytes.fromhex("07EA0A0D0C1E")) == dt.datetime(
+        2026, 10, 13, 12, 30
+    )
+    with pytest.raises(CodecError):
+        decode({"type": "date-time"}, bytes.fromhex("07EA0A0D0C"))
+    raw = {"type": "raw", "minSize": 1, "maxSize": 2}
+    assert decode(raw, b"\x01") == b"\x01"
+    with pytest.raises(CodecError):
+        decode(raw, b"\x01\x02\x03")
+    assert encode(raw, "0x0A0B") == b"\x0a\x0b"
+    with pytest.raises(CodecError):
+        encode(raw, "zz")
+
+
+def test_fixed_size() -> None:
+    assert fixed_size(PDB.get(0xC7).schema) == 4
+    assert fixed_size({"type": "date"}) == 4
+    assert fixed_size({"type": "time", "size": 2}) == 2
+    assert fixed_size({"type": "raw", "minSize": 1, "maxSize": 17}) is None
+    assert fixed_size(PDB.get(0xB3).schema) is None  # ends with a variable-length list
+
+
+def test_encode_rejects_unsupported_values() -> None:
+    with pytest.raises(CodecError):
+        encode({"type": "date"}, dt.date(2026, 1, 1))
+    with pytest.raises(CodecError):
+        encode(primary(AIRCON.get(0xB3).schema), True)
+    assert encode({"type": "number", "format": "uint8"}, b"\x05") == b"\x05"
+
+
+def test_unsupported_type() -> None:
+    with pytest.raises(CodecError):
+        decode({"type": "mystery"}, b"\x00")

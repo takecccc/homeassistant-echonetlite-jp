@@ -102,7 +102,7 @@ async def test_chunking(echonet: EchonetClient, fake_node: FakeNode) -> None:
 
 async def test_timeout_adapts_to_fast_nodes(echonet: EchonetClient, fake_node: FakeNode) -> None:
     client = EchonetClient(echonet.transport, timeout=3.0, min_timeout=0.1, retries=1)
-    assert client.timeout_for(FAKE_HOST) == 3.0
+    assert client.timeout_for(FAKE_HOST) == 1.0  # nothing learned yet
     for _ in range(5):
         await client.get_one(FAKE_HOST, AIRCON, 0x80)
     assert client.timeout_for(FAKE_HOST) == pytest.approx(0.1)

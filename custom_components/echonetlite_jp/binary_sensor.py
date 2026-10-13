@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -26,8 +29,11 @@ class EchonetBinarySensor(EchonetEntity, BinarySensorEntity):
         self, coordinator: EchonetCoordinator, device: EchonetDevice, spec: PropertySpec
     ) -> None:
         super().__init__(coordinator, device, spec)
-        self._attr_device_class = spec.device_class
+        self._attr_device_class = (
+            BinarySensorDeviceClass(spec.device_class) if spec.device_class else None
+        )
 
     @property
     def is_on(self) -> bool | None:
-        return self.value
+        value = self.current_value
+        return value if isinstance(value, bool) else None

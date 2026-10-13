@@ -13,6 +13,10 @@ class EchonetTimeoutError(EchonetError, TimeoutError):
     """No response arrived in time."""
 
 
+class EchonetConnectionClosed(EchonetError, ConnectionError):
+    """The transport is not open (or was closed while waiting)."""
+
+
 class EchonetRequestRejected(EchonetError):
     """The node answered with an error service code (…_SNA)."""
 

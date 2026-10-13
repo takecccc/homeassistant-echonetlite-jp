@@ -8,7 +8,7 @@ import socket
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from .errors import EchonetTimeoutError
+from .errors import EchonetConnectionClosed, EchonetTimeoutError
 from .protocol import (
     CONTROLLER,
     ECHONET_PORT,
@@ -98,7 +98,7 @@ class EchonetTransport(asyncio.DatagramProtocol):
             except TimeoutError as err:
                 raise EchonetTimeoutError(f"no response from {host} {deoj}") from err
             if frame is _CLOSED:
-                raise ConnectionError("transport closed")
+                raise EchonetConnectionClosed("transport closed")
             return frame
         finally:
             self._pending.pop(tid, None)
@@ -166,7 +166,7 @@ class EchonetTransport(asyncio.DatagramProtocol):
 
     def _register(self, host: str | None) -> tuple[int, _Pending]:
         if self._transport is None:
-            raise ConnectionError("transport is not open")
+            raise EchonetConnectionClosed("transport is not open")
         for _ in range(0xFFFF):
             self._next_tid = self._next_tid % 0xFFFF + 1
             if self._next_tid not in self._pending:
@@ -177,7 +177,7 @@ class EchonetTransport(asyncio.DatagramProtocol):
 
     def _send(self, host: str, frame: Frame) -> None:
         if self._transport is None:
-            raise ConnectionError("transport is not open")
+            raise EchonetConnectionClosed("transport is not open")
         self._transport.sendto(frame.encode(), (host, self._port))
 
     def _create_socket(self) -> socket.socket:
