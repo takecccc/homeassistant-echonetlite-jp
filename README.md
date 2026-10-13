@@ -137,6 +137,10 @@ custom_components/echonetlite_jp/
 └── sensor.py / binary_sensor.py / switch.py / number.py / select.py
 ```
 
+## ライセンス
+
+[Apache License 2.0](LICENSE)。同梱の MRA とメーカーコード表の権利表示は [NOTICE](NOTICE) を参照してください。
+
 ## クレジット
 
 - 同梱の MRA: Machine Readable Appendix V1.3.1, (C) 2021-2025 Kanagawa Institute of Technology, ECHONET Consortium

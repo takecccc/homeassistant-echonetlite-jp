@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Home Assistant custom integration for ECHONET Lite devices, driven by the ECHONET MRA"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
 dependencies = []
 
 [tool.uv]
