@@ -29,6 +29,7 @@ from echonet.device import EchonetDevice
 from echonet.mra import MraCatalog
 from echonet.network import EchonetNetwork
 from echonet.protocol import EOJ
+from echonet.quirks import DeviceKey
 from echonet.transport import EchonetTimeoutError, EchonetTransport
 
 
@@ -101,7 +102,8 @@ async def _run(args: argparse.Namespace) -> int:
             print(f"0x{args.epc:02X} <- {args.edt.hex().upper()}: OK")
             return 0
         info = await client.get_object(args.host, args.eoj)
-        device = EchonetDevice("cli", info, catalog.get_class(args.eoj.class_code))
+        key = DeviceKey(args.eoj.class_code, info.manufacturer_code, info.product_code)
+        device = EchonetDevice("cli", info, catalog.get_device_class(key))
         result = await client.get(args.host, args.eoj, args.epcs or sorted(info.maps.get))
         device.values = result.values
         for epc in args.epcs or sorted(info.maps.get):
@@ -117,10 +119,14 @@ def _print_scan(network: EchonetNetwork, lang: str) -> None:
     for device in sorted(network.devices.values(), key=lambda d: (d.host, d.eoj)):
         maps = device.info.maps
         print(f"{device.host}  {device.eoj}  {device.class_def.name.get(lang)}")
+        code = device.info.manufacturer_code
         print(
-            f"    uid={device.node_uid} maker={device.info.manufacturer} "
-            f"product={device.info.product_code}"
+            f"    uid={device.node_uid} maker={device.info.manufacturer}"
+            f" ({f'0x{code:06X}' if code is not None else '-'})"
+            f" product={device.info.product_code}"
         )
+        if device.class_def.quirks:
+            print(f"    quirks={', '.join(device.class_def.quirks)}")
         print(f"    get={_epcs(maps.get)}\n    set={_epcs(maps.set)}\n    inf={_epcs(maps.inf)}")
 
 
@@ -139,6 +145,8 @@ def _describe(device: EchonetDevice, lang: str) -> dict[str, Any]:
         "class": device.class_def.name.get(lang),
         "uid": device.node_uid,
         "manufacturer": device.info.manufacturer,
+        "product_code": device.info.product_code,
+        "quirks": list(device.class_def.quirks),
         "properties": props,
         "derived": device.derived,
     }

@@ -24,7 +24,13 @@ async def async_get_config_entry_diagnostics(
                 "class": device.class_def.name.en,
                 "class_known": device.class_def.known,
                 "manufacturer": device.info.manufacturer,
+                "manufacturer_code": (
+                    f"0x{device.info.manufacturer_code:06X}"
+                    if device.info.manufacturer_code is not None
+                    else None
+                ),
                 "product_code": device.info.product_code,
+                "quirks": list(device.class_def.quirks),
                 "available": device.available,
                 "get_map": [f"0x{e:02X}" for e in sorted(device.info.maps.get)],
                 "set_map": [f"0x{e:02X}" for e in sorted(device.info.maps.set)],

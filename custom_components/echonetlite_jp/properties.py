@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
@@ -37,6 +37,12 @@ EPC_FAULT_STATUS = 0x88
 _PRIMARY_SUPER_EPCS = frozenset({0x80, 0x84, 0x85, 0x88, 0x8F})
 _CLASS_WATER_METER = 0x0281
 _CLASS_GAS_METER = 0x0282
+
+_CATEGORIES = {
+    None: None,
+    "diagnostic": EntityCategory.DIAGNOSTIC,
+    "config": EntityCategory.CONFIG,
+}
 
 # MRA unit -> (HA unit, device class)
 _UNITS: dict[str, tuple[str, SensorDeviceClass | None]] = {
@@ -114,10 +120,22 @@ class PropertySpec:
 def device_specs(device: EchonetDevice, language: str) -> list[PropertySpec]:
     specs: list[PropertySpec] = []
     for epc in device.poll_epcs():
-        specs.extend(_property_specs(device, epc, language))
+        prop = device.class_def.get(epc)
+        hints = prop.hints if prop is not None else {}
+        specs.extend(_apply_hints(spec, hints) for spec in _property_specs(device, epc, language))
     if device.extension is not None:
         specs.extend(_derived_spec(sensor, language) for sensor in device.extension.sensors(device))
     return specs
+
+
+def _apply_hints(spec: PropertySpec, hints: dict[str, Any]) -> PropertySpec:
+    """Apply presentation overrides from quirks."""
+    changes: dict[str, Any] = {}
+    if "enabled" in hints:
+        changes["enabled_default"] = hints["enabled"]
+    if "category" in hints:
+        changes["entity_category"] = _CATEGORIES[hints["category"]]
+    return replace(spec, **changes) if changes else spec
 
 
 def read_value(device: EchonetDevice, spec: PropertySpec, language: str) -> Any:

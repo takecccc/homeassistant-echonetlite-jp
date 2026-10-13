@@ -54,12 +54,18 @@ ECHONET オブジェクト（例: `028701` 分電盤メータリング）ごと�
 - 設定可能な動作状態 (`0x80`) は、デバイス名をそのまま名前にしたメインのスイッチになります。
 - 設置場所や時刻設定などの管理用プロパティは「診断」カテゴリに入ります。
 - MRA に定義がない EPC（メーカー独自 `0xF0`–`0xFF` など）は、生データ (16 進) のセンサーとして **無効状態** で登録されます。必要なものだけ有効化してください。
-- メーカー独自のクラスグループ `0x0F` のオブジェクトは取り込みません。
+- メーカー独自のクラスグループ `0x0F` のオブジェクトは、機種固有の定義 (quirk) がある場合だけ取り込みます。
 - 表示名は Home Assistant の言語設定が日本語なら日本語、それ以外は英語になります。エンティティ ID は言語に関係なく英語（例: `sensor.power_distribution_board_metering_ch1_energy`）です。
 
 ### 分電盤メータリング (0x0287)
 
 回路ごとの積算電力量・瞬時電力を、リスト形式のプロパティ（`0xB3`/`0xB7`/`0xBA`/`0xBE`）から取得して、チャンネルごとのセンサーにします。チャンネル範囲を設定できる機器では、チャンネル数 (`0xB1`/`0xB8`) に合わせて範囲を指定して読み出します。
+
+### 機種固有の対応 (quirks)
+
+MRA に載っていないメーカー独自プロパティや、MRA どおりに動かない機器への対応は、[custom_components/echonetlite_jp/quirks/](custom_components/echonetlite_jp/quirks/README.md) に JSON ファイルを追加して行います。
+クラスコード・メーカーコード・商品コードで対象機器を指定し、MRA と同じ形式でプロパティの追加・上書き・削除ができます。
+対応してほしい機器がある場合は、診断情報を添えて Issue を作成してください。
 
 ## サービス
 
@@ -115,12 +121,14 @@ custom_components/echonetlite_jp/
 │   ├── protocol.py     フレーム・EOJ・プロパティマップのエンコード/デコード
 │   ├── transport.py    UDP 送受信、TID による応答の対応付け、INF 受信
 │   ├── client.py       Get/Set、分割取得と個別取得へのフォールバック
-│   ├── mra.py          MRA の遅延読み込みと $ref 解決
+│   ├── mra.py          MRA の遅延読み込みと $ref 解決、quirk の適用
+│   ├── quirks.py       機種固有の定義ファイルの読み込みと検証
 │   ├── codec.py        MRA スキーマに基づく値のデコード/エンコード
 │   ├── device.py       機器 (オブジェクト) の状態
 │   ├── network.py      探索・ポーリング・通知の反映
 │   └── classes/        MRA だけでは表せないクラス固有処理 (0x0287)
 ├── mra_data/           同梱の MRA (V1.3.1)
+├── quirks/             機種固有の定義 (JSON)
 ├── properties.py       MRA プロパティ → HA エンティティの対応付け
 ├── coordinator.py      DataUpdateCoordinator
 ├── entity.py           エンティティ共通処理

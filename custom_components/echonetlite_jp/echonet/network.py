@@ -7,11 +7,12 @@ import logging
 from collections import defaultdict
 from dataclasses import replace
 
-from .classes import EXTENSIONS
+from .classes import extension_for
 from .client import EPC_INSTANCE_LIST_NOTIFICATION, EchonetClient, EchonetError
 from .device import EchonetDevice
-from .mra import ClassDef, MraCatalog
+from .mra import MraCatalog
 from .protocol import Frame
+from .quirks import DeviceKey
 from .transport import EchonetTimeoutError
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,7 +39,8 @@ class EchonetNetwork:
         self.devices: dict[str, EchonetDevice] = {}
         self._hosts = list(hosts or [])
         self._discovery_wait = discovery_wait
-        # Class group 0x0F is vendor-defined; the MRA cannot describe it.
+        # Class group 0x0F is vendor-defined; only objects described by a quirk
+        # are kept unless explicitly requested.
         self._include_user_defined = include_user_defined
         self.rediscovery_requested = False
 
@@ -66,7 +68,12 @@ class EchonetNetwork:
 
     async def async_poll_device(self, device: EchonetDevice) -> None:
         try:
-            result = await self.client.get(device.host, device.eoj, device.poll_epcs())
+            result = await self.client.get(
+                device.host,
+                device.eoj,
+                device.poll_epcs(),
+                max_properties=device.class_def.max_properties,
+            )
         except EchonetTimeoutError:
             if device.available:
                 _LOGGER.info("%s (%s) stopped responding", device.id, device.host)
@@ -117,7 +124,7 @@ class EchonetNetwork:
             return []
         devices: list[EchonetDevice] = []
         for eoj in node.instances:
-            if eoj.is_node_profile or (eoj.group == 0x0F and not self._include_user_defined):
+            if eoj.is_node_profile:
                 continue
             try:
                 info = await self.client.get_object(host, eoj)
@@ -130,18 +137,20 @@ class EchonetNetwork:
                 uid = f"ip-{host}"
             if info.manufacturer is None and node.manufacturer is not None:
                 info = replace(info, manufacturer=node.manufacturer)
-            class_def = await self._class_def(eoj.class_code)
+            if info.manufacturer_code is None and node.manufacturer_code is not None:
+                info = replace(info, manufacturer_code=node.manufacturer_code)
+            key = DeviceKey(eoj.class_code, info.manufacturer_code, info.product_code)
+            class_def = await asyncio.to_thread(self.catalog.get_device_class, key)
+            if eoj.group == 0x0F and not class_def.quirks and not self._include_user_defined:
+                continue
+            if class_def.quirks:
+                _LOGGER.debug("%s %s: applying %s", host, eoj, ", ".join(class_def.quirks))
             devices.append(
                 EchonetDevice(
                     node_uid=uid,
                     info=info,
                     class_def=class_def,
-                    extension=EXTENSIONS.get(eoj.class_code),
+                    extension=extension_for(class_def),
                 )
             )
         return devices
-
-    async def _class_def(self, class_code: int) -> ClassDef:
-        if self.catalog.is_loaded(class_code):
-            return self.catalog.get_class(class_code)
-        return await asyncio.to_thread(self.catalog.get_class, class_code)

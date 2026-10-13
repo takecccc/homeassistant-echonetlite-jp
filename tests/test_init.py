@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -184,3 +186,28 @@ async def test_migrate_v1(hass: HomeAssistant) -> None:
     assert entry.version == 2
     assert entry.data == {}
     assert entry.options == {"hosts": ["192.168.1.5"], "interface": "", "scan_interval": 60}
+
+
+async def test_quirks(hass: HomeAssistant, fake_node: FakeNode, tmp_path: Path) -> None:
+    quirk = {
+        "match": {"eoj": "0x0130", "manufacturer": "0x00000B"},
+        "elProperties": [
+            {
+                "epc": "0xF5",
+                "propertyName": {"ja": "独自値", "en": "Vendor value"},
+                "shortName": "vendorValue",
+                "accessRule": {"get": "required", "set": "notApplicable", "inf": "optional"},
+                "data": {"type": "number", "format": "uint16", "minimum": 0, "maximum": 65533},
+            },
+            {"epc": "0xBB", "homeassistant": {"enabled": False}},
+            {"epc": "0xB0", "remove": True},
+        ],
+    }
+    (tmp_path / "aircon.json").write_text(json.dumps(quirk), encoding="utf-8")
+    await setup_integration(hass, fake_node, quirks_dir=tmp_path)
+
+    assert hass.states.get("sensor.home_air_conditioner_vendor_value").state == "258"
+    ent_reg = er.async_get(hass)
+    room = ent_reg.async_get("sensor.home_air_conditioner_room_temperature")
+    assert room.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert ent_reg.async_get("select.home_air_conditioner_operation_mode") is None

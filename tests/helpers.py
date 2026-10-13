@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
+from pathlib import Path
 from unittest.mock import patch
 
 from homeassistant.const import CONF_SCAN_INTERVAL
@@ -11,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.echonetlite_jp.const import CONF_HOSTS, CONF_INTERFACE, DOMAIN
 from custom_components.echonetlite_jp.echonet.client import EchonetClient
+from custom_components.echonetlite_jp.echonet.mra import MraCatalog
 from custom_components.echonetlite_jp.echonet.protocol import EOJ
 from custom_components.echonetlite_jp.echonet.transport import EchonetTransport
 
@@ -55,7 +57,11 @@ def board() -> FakeObject:
 
 
 async def setup_integration(
-    hass: HomeAssistant, fake_node: FakeNode, *, language: str = "en"
+    hass: HomeAssistant,
+    fake_node: FakeNode,
+    *,
+    language: str = "en",
+    quirks_dir: Path | None = None,
 ) -> MockConfigEntry:
     hass.config.language = language
     port = await fake_node.start()
@@ -73,6 +79,10 @@ async def setup_integration(
         patch(
             "custom_components.echonetlite_jp.EchonetClient",
             partial(EchonetClient, timeout=0.2, retries=0),
+        ),
+        patch(
+            "custom_components.echonetlite_jp.MraCatalog",
+            partial(MraCatalog, quirks_dir=quirks_dir),
         ),
     ):
         await hass.config_entries.async_setup(entry.entry_id)

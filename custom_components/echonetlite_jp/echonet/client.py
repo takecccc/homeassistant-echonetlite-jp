@@ -53,6 +53,7 @@ class NodeInfo:
     host: str
     uid: str | None
     manufacturer: str | None
+    manufacturer_code: int | None
     instances: tuple[EOJ, ...]
 
 
@@ -70,6 +71,7 @@ class ObjectInfo:
     maps: PropertyMaps
     uid: str | None = None
     manufacturer: str | None = None
+    manufacturer_code: int | None = None
     product_code: str | None = None
     serial_number: str | None = None
 
@@ -109,6 +111,7 @@ class EchonetClient:
             host=host,
             uid=_uid(result.values.get(EPC_UID)),
             manufacturer=manufacturer_name(result.values.get(EPC_MANUFACTURER)),
+            manufacturer_code=manufacturer_code(result.values.get(EPC_MANUFACTURER)),
             instances=tuple(decode_instance_list(result.values[EPC_INSTANCE_LIST])),
         )
 
@@ -137,21 +140,26 @@ class EchonetClient:
             ),
             uid=_uid(values.get(EPC_UID)),
             manufacturer=manufacturer_name(values.get(EPC_MANUFACTURER)),
+            manufacturer_code=manufacturer_code(values.get(EPC_MANUFACTURER)),
             product_code=_ascii(values.get(EPC_PRODUCT_CODE)),
             serial_number=_ascii(values.get(EPC_SERIAL_NUMBER)),
         )
 
-    async def get(self, host: str, eoj: EOJ, epcs: Iterable[int]) -> GetResult:
+    async def get(
+        self, host: str, eoj: EOJ, epcs: Iterable[int], *, max_properties: int | None = None
+    ) -> GetResult:
         """GET many properties, splitting into chunks and falling back to one
         property per request for nodes that reject or drop large requests.
 
+        ``max_properties`` lowers the chunk size for nodes known to need it.
         Raises EchonetTimeoutError only when the node does not answer at all.
         """
         ordered = list(dict.fromkeys(epcs))
         result = GetResult()
         answered = False
-        for start in range(0, len(ordered), self._max_properties):
-            chunk = ordered[start : start + self._max_properties]
+        size = max(1, min(max_properties or self._max_properties, self._max_properties))
+        for start in range(0, len(ordered), size):
+            chunk = ordered[start : start + size]
             try:
                 frame = await self._request(host, eoj, ESV.GET, [Property(e) for e in chunk])
             except EchonetTimeoutError:
@@ -214,10 +222,16 @@ class EchonetClient:
         raise AssertionError("unreachable")
 
 
-def manufacturer_name(edt: bytes | None) -> str | None:
+def manufacturer_code(edt: bytes | None) -> int | None:
     if not edt or len(edt) != 3:
         return None
-    code = int.from_bytes(edt, "big")
+    return int.from_bytes(edt, "big")
+
+
+def manufacturer_name(edt: bytes | None) -> str | None:
+    code = manufacturer_code(edt)
+    if code is None:
+        return None
     return MANUFACTURERS.get(code, f"0x{code:06X}")
 
 

@@ -1,17 +1,23 @@
 """ECHONET Machine Readable Appendix (MRA) catalog.
 
 The MRA describes every device class as JSON. This module loads the class
-files lazily, resolves ``$ref`` pointers into ``definitions.json`` and merges
-the super class (0x0000) properties into each device class.
+files lazily, resolves ``$ref`` pointers into ``definitions.json``, merges
+the super class (0x0000) properties into each device class and applies
+device-specific quirks on top.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from .quirks import DEFAULT_QUIRKS_DIR, UNCHANGED, DeviceKey, Quirk, QuirkError, load_quirks
+
+_LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MRA_DIR = Path(__file__).resolve().parent.parent / "mra_data"
 SUPER_CLASS = 0x0000
@@ -52,6 +58,8 @@ class PropertyDef:
     set: bool
     inf: bool
     atomic: int | None = None
+    # Home Assistant presentation hints from quirks ("enabled", "category").
+    hints: dict[str, Any] = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,10 @@ class ClassDef:
     short_name: str
     properties: dict[int, PropertyDef]
     known: bool = True
+    # Set by quirks; see quirks.py.
+    max_properties: int | None = None
+    extension: str | None = UNCHANGED
+    quirks: tuple[str, ...] = ()
 
     def get(self, epc: int) -> PropertyDef | None:
         return self.properties.get(epc)
@@ -83,12 +95,17 @@ class MraCatalog:
     executor when running inside an event loop.
     """
 
-    def __init__(self, root: Path | str | None = None) -> None:
+    def __init__(
+        self, root: Path | str | None = None, *, quirks_dir: Path | str | None = DEFAULT_QUIRKS_DIR
+    ) -> None:
         self._root = Path(root) if root else DEFAULT_MRA_DIR
+        self._quirks_dir = Path(quirks_dir) if quirks_dir else None
         self._lock = threading.Lock()
         self._definitions: dict[str, Schema] | None = None
         self._super: dict[int, PropertyDef] | None = None
         self._classes: dict[int, ClassDef] = {}
+        self._quirks: list[Quirk] | None = None
+        self._devices: dict[DeviceKey, ClassDef] = {}
 
     @property
     def version(self) -> str:
@@ -97,9 +114,6 @@ class MraCatalog:
             return str(meta["metaData"]["dataVersion"])
         except (OSError, KeyError, ValueError):
             return "unknown"
-
-    def is_loaded(self, class_code: int) -> bool:
-        return class_code in self._classes
 
     def get_class(self, class_code: int) -> ClassDef:
         cached = self._classes.get(class_code)
@@ -111,6 +125,46 @@ class MraCatalog:
                 cached = self._load_class(class_code)
                 self._classes[class_code] = cached
             return cached
+
+    def get_device_class(self, key: DeviceKey) -> ClassDef:
+        """The class definition for one device: MRA plus matching quirks."""
+        cached = self._devices.get(key)
+        if cached is not None:
+            return cached
+        base = self.get_class(key.class_code)
+        with self._lock:
+            if self._quirks is None:
+                self._quirks = load_quirks(self._quirks_dir) if self._quirks_dir else []
+            matching = sorted(
+                (q for q in self._quirks if q.matches(key)), key=lambda q: q.specificity
+            )
+            class_def = base
+            for quirk in matching:
+                class_def = self._apply_quirk(class_def, quirk)
+            self._devices[key] = class_def
+            return class_def
+
+    def _apply_quirk(self, class_def: ClassDef, quirk: Quirk) -> ClassDef:
+        props = dict(class_def.properties)
+        for raw in quirk.properties:
+            epc = int(raw["epc"], 16)
+            if raw.get("remove"):
+                props.pop(epc, None)
+                continue
+            try:
+                props[epc] = self._property(raw, epc, base=props.get(epc))
+            except QuirkError as err:
+                _LOGGER.error("quirk %s: %s", quirk.source, err)
+        return replace(
+            class_def,
+            name=Text.from_json(quirk.class_name) if quirk.class_name else class_def.name,
+            short_name=quirk.short_name or class_def.short_name,
+            properties=props,
+            known=class_def.known or bool(quirk.class_name),
+            max_properties=quirk.max_properties or class_def.max_properties,
+            extension=class_def.extension if quirk.extension == UNCHANGED else quirk.extension,
+            quirks=(*class_def.quirks, quirk.source),
+        )
 
     def _load_class(self, class_code: int) -> ClassDef:
         super_props = self._super_properties()
@@ -155,24 +209,48 @@ class MraCatalog:
             # A class file may list several revisions of one EPC; keep the current one.
             if epc in latest and not is_latest:
                 continue
-            access = raw.get("accessRule") or {}
-            short_name = str(raw.get("shortName") or "")
-            if short_name == "DEL":  # data quirk in the super class (0x97)
-                short_name = ""
-            out[epc] = PropertyDef(
-                epc=epc,
-                name=Text.from_json(raw.get("propertyName"), short_name or f"0x{epc:02X}"),
-                short_name=short_name,
-                description=Text.from_json(raw.get("descriptions")),
-                schema=self._resolve(raw.get("data") or {}),
-                get=access.get("get", "notApplicable") != "notApplicable",
-                set=access.get("set", "notApplicable") != "notApplicable",
-                inf=access.get("inf", "notApplicable") != "notApplicable",
-                atomic=_parse_epc(raw.get("atomic")),
-            )
+            out[epc] = self._property(raw, epc, quirk=False)
             if is_latest:
                 latest.add(epc)
         return out
+
+    def _property(
+        self, raw: dict[str, Any], epc: int, base: PropertyDef | None = None, *, quirk: bool = True
+    ) -> PropertyDef:
+        """Build a property from MRA JSON. For quirks, keys missing from ``raw``
+        are taken from ``base`` so that only part of a property is overridden."""
+        if quirk and base is None and "data" not in raw:
+            raise QuirkError(f"0x{epc:02X} is not in the MRA, so 'data' is required")
+
+        def pick(key: str, convert: Any, inherited: Any) -> Any:
+            return convert(raw.get(key)) if key in raw or base is None else inherited
+
+        short_name = str(raw.get("shortName") or (base.short_name if base else ""))
+        if short_name == "DEL":  # data quirk in the super class (0x97)
+            short_name = ""
+        if "accessRule" in raw or base is None:
+            access = raw.get("accessRule") or {}
+            get, set_, inf = (
+                access.get(op, "notApplicable") != "notApplicable" for op in ("get", "set", "inf")
+            )
+        else:
+            get, set_, inf = base.get, base.set, base.inf
+        return PropertyDef(
+            epc=epc,
+            name=pick(
+                "propertyName",
+                lambda v: Text.from_json(v, short_name or f"0x{epc:02X}"),
+                base and base.name,
+            ),
+            short_name=short_name,
+            description=pick("descriptions", Text.from_json, base and base.description),
+            schema=pick("data", lambda v: self._resolve(v or {}), base and base.schema),
+            get=get,
+            set=set_,
+            inf=inf,
+            atomic=pick("atomic", _parse_epc, base and base.atomic),
+            hints={**(base.hints if base else {}), **raw.get("homeassistant", {})},
+        )
 
     def _resolve(self, node: Any) -> Any:
         """Inline ``$ref`` targets; keys beside a ``$ref`` override the target."""
