@@ -162,7 +162,7 @@ async def test_lost_device_requests_rediscovery_in_multicast_mode(
     fake_node.silent = False
     multicast = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
     await multicast.async_discover()
-    multicast._hosts = []  # behave like auto-discovery from here on
+    multicast.hosts = []  # behave like auto-discovery from here on
     fake_node.silent = True
     await multicast.async_poll()
     assert multicast.rediscovery_requested
@@ -180,7 +180,7 @@ async def test_device_moves_to_a_new_address(echonet: EchonetClient, fake_node: 
     try:
         await network.async_poll()
         assert not device.available
-        network._hosts = ["127.0.0.3"]
+        network.hosts = ["127.0.0.3"]
         assert await network.async_discover() == []
         assert network.devices[device.id] is device
         assert device.host == "127.0.0.3"

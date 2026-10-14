@@ -74,6 +74,10 @@ class FakeNode(asyncio.DatagramProtocol):
             self._transport.close()
             self._transport = None
 
+    def send_raw(self, data: bytes, addr: tuple[str, int]) -> None:
+        assert self._transport is not None
+        self._transport.sendto(data, addr)
+
     def notify(self, eoj: EOJ, epc: int, edt: bytes, addr: tuple[str, int]) -> None:
         assert self._transport is not None
         frame = Frame(0, eoj, EOJ(0x05, 0xFF, 0x01), ESV.INF, (Property(epc, edt),))

@@ -41,8 +41,7 @@ async def test_infc_is_acknowledged_and_forwarded(
     received: list[tuple[str, Frame]] = []
     remove = echonet.transport.add_listener(lambda host, frame: received.append((host, frame)))
     frame = Frame(7, AIRCON, EOJ(5, 0xFF, 1), ESV.INFC, (Property(0x80, b"\x31"),))
-    assert fake_node._transport is not None
-    fake_node._transport.sendto(frame.encode(), ("127.0.0.1", fake_node.port))
+    fake_node.send_raw(frame.encode(), ("127.0.0.1", fake_node.port))
     for _ in range(50):
         await asyncio.sleep(0.01)
         if received:
@@ -70,8 +69,7 @@ async def test_listener_errors_are_contained(
 
 
 async def test_garbage_is_ignored(echonet: EchonetClient, fake_node: FakeNode) -> None:
-    assert fake_node._transport is not None
-    fake_node._transport.sendto(b"not echonet", ("127.0.0.1", fake_node.port))
+    fake_node.send_raw(b"not echonet", ("127.0.0.1", fake_node.port))
     await asyncio.sleep(0.02)
     assert await echonet.get_one(FAKE_HOST, AIRCON, 0x80) == b"\x30"
 

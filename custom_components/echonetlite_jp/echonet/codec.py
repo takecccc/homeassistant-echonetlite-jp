@@ -306,26 +306,46 @@ _DECODERS: dict[str, Callable[[Schema, bytes, CoefficientLookup | None], Any]] =
 }
 
 
-def decode_property(class_def: ClassDef, epc: int, values: Mapping[int, bytes]) -> Any:
-    """Decode a property of a device, resolving coefficient references
-    (e.g. 0xC2 "unit for cumulative energy") from the device's other values."""
-    prop = class_def.get(epc)
-    edt = values.get(epc)
-    if prop is None or edt is None:
-        raise CodecError(f"no definition or value for 0x{epc:02X}")
+def coefficient_lookup(class_def: ClassDef, values: Mapping[int, bytes]) -> CoefficientLookup:
+    """Resolve coefficient references (e.g. 0xC2 "unit for cumulative energy")
+    from a device's other property values."""
 
-    def coefficient(ref: int) -> float | None:
+    def lookup(ref: int) -> float | None:
         ref_prop = class_def.get(ref)
         ref_edt = values.get(ref)
-        if ref_prop is None or ref_edt is None or ref == epc:
+        if ref_prop is None or ref_edt is None:
             return None
         try:
-            value = decode(ref_prop.schema, ref_edt)
+            value = decode(ref_prop.schema, ref_edt)  # coefficients have no coefficients
         except CodecError:
             return None
         return float(value) if isinstance(value, (int, float)) else None
 
-    return decode(prop.schema, edt, coefficient)
+    return lookup
+
+
+def decode_property(class_def: ClassDef, epc: int, values: Mapping[int, bytes]) -> Any:
+    """Decode a property of a device, applying coefficients from its other values."""
+    prop = class_def.get(epc)
+    edt = values.get(epc)
+    if prop is None or edt is None:
+        raise CodecError(f"no definition or value for 0x{epc:02X}")
+    return decode(prop.schema, edt, coefficient_lookup(class_def, values))
+
+
+def to_plain(value: Any, language: str) -> Any:
+    """A decoded value as JSON-friendly data (labels, hex, ISO dates)."""
+    if isinstance(value, EnumValue):
+        return value.label.get(language)
+    if isinstance(value, dict):
+        return {key: to_plain(item, language) for key, item in value.items()}
+    if isinstance(value, list):
+        return [to_plain(item, language) for item in value]
+    if isinstance(value, bytes):
+        return value.hex().upper()
+    if isinstance(value, (dt.date, dt.time)):  # datetime is a date
+        return value.isoformat()
+    return value
 
 
 # ---------------------------------------------------------------- encoding

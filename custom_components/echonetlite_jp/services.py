@@ -19,7 +19,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .coordinator import EchonetCoordinator
-from .echonet.codec import EnumValue
+from .echonet.codec import to_plain
 from .echonet.device import EchonetDevice
 from .echonet.errors import EchonetError
 
@@ -73,7 +73,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             "epc": f"0x{epc:02X}",
             "name": prop.name.get(coordinator.language) if prop else None,
             "edt": edt.hex().upper(),
-            "value": _jsonable(device.decode(epc), coordinator.language),
+            "value": to_plain(device.decode(epc), coordinator.language),
         }
 
     async def set_property(call: ServiceCall) -> None:
@@ -104,17 +104,3 @@ def _resolve(hass: HomeAssistant, device_id: str) -> tuple[EchonetCoordinator, E
             if (device := coordinator.network.devices.get(identifier)) is not None:
                 return coordinator, device
     raise ServiceValidationError(f"{device_id} is not a loaded ECHONET Lite device")
-
-
-def _jsonable(value: Any, language: str) -> Any:
-    if isinstance(value, EnumValue):
-        return value.label.get(language)
-    if isinstance(value, dict):
-        return {k: _jsonable(v, language) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_jsonable(v, language) for v in value]
-    if isinstance(value, bytes):
-        return value.hex().upper()
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return value

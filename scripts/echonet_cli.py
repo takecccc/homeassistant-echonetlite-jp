@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import datetime as dt
 import json
 import logging
 import sys
@@ -23,10 +22,11 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "custom_components" / "echonetlite_jp")
 )
 
-from echonet.client import EchonetClient
-from echonet.codec import EnumValue
+from echonet.client import EPC_INSTALLATION_LOCATION, EchonetClient
+from echonet.codec import to_plain
 from echonet.device import EchonetDevice
 from echonet.errors import EchonetError
+from echonet.location import decode_location
 from echonet.mra import MraCatalog
 from echonet.network import EchonetNetwork
 from echonet.protocol import EOJ
@@ -105,7 +105,8 @@ async def _run(args: argparse.Namespace) -> int:
         info = await client.get_object(args.host, args.eoj)
         key = DeviceKey(args.eoj.class_code, info.manufacturer_code, info.product_code)
         device = EchonetDevice("cli", info, catalog.get_device_class(key))
-        result = await client.get(args.host, args.eoj, args.epcs or sorted(info.maps.get))
+        # Read everything readable so that coefficients (e.g. units) apply.
+        result = await client.get(args.host, args.eoj, {*info.maps.get, *args.epcs})
         device.values = result.values
         for epc in args.epcs or sorted(info.maps.get):
             print(_format_property(device, epc, args.lang))
@@ -138,7 +139,7 @@ def _describe(device: EchonetDevice, lang: str) -> dict[str, Any]:
         props[f"0x{epc:02X}"] = {
             "name": prop.name.get(lang) if prop else None,
             "edt": edt.hex().upper(),
-            "value": _plain(device.decode(epc), lang),
+            "value": _value(device, epc, lang),
         }
     return {
         "host": device.host,
@@ -159,21 +160,14 @@ def _format_property(device: EchonetDevice, epc: int, lang: str) -> str:
     edt = device.values.get(epc)
     if edt is None:
         return f"0x{epc:02X} {name}: (no value)"
-    return f"0x{epc:02X} {name}: {edt.hex().upper()} -> {_plain(device.decode(epc), lang)}"
+    return f"0x{epc:02X} {name}: {edt.hex().upper()} -> {_value(device, epc, lang)}"
 
 
-def _plain(value: Any, lang: str) -> Any:
-    if isinstance(value, EnumValue):
-        return value.label.get(lang)
-    if isinstance(value, dict):
-        return {k: _plain(v, lang) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_plain(v, lang) for v in value]
-    if isinstance(value, bytes):
-        return value.hex().upper()
-    if isinstance(value, (dt.date, dt.time)):
-        return value.isoformat()
-    return value
+def _value(device: EchonetDevice, epc: int, lang: str) -> Any:
+    if epc == EPC_INSTALLATION_LOCATION:
+        location = decode_location(device.values.get(epc, b""))
+        return location.get(lang) if location else None
+    return to_plain(device.decode(epc), lang)
 
 
 def _epcs(epcs: frozenset[int]) -> str:

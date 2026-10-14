@@ -37,7 +37,8 @@ class EchonetNetwork:
         self.client = client
         self.catalog = catalog
         self.devices: dict[str, EchonetDevice] = {}
-        self._hosts = list(hosts or [])
+        # Fixed addresses; empty means multicast discovery.
+        self.hosts = list(hosts or [])
         self._discovery_wait = discovery_wait
         # Class group 0x0F is vendor-defined; only objects described by a quirk
         # are kept unless explicitly requested.
@@ -46,7 +47,7 @@ class EchonetNetwork:
 
     async def async_discover(self) -> list[EchonetDevice]:
         """Find nodes and their objects. Returns devices seen for the first time."""
-        hosts = self._hosts or await self.client.discover(self._discovery_wait)
+        hosts = self.hosts or await self.client.discover(self._discovery_wait)
         found = await asyncio.gather(*(self._discover_host(host) for host in hosts))
         new: list[EchonetDevice] = []
         for devices in found:
@@ -78,7 +79,7 @@ class EchonetNetwork:
             if device.available:
                 _LOGGER.info("%s (%s) stopped responding", device.id, device.host)
                 # It may have a new address (DHCP); look for it on the network.
-                if not self._hosts:
+                if not self.hosts:
                     self.rediscovery_requested = True
             device.available = False
             return
@@ -107,7 +108,7 @@ class EchonetNetwork:
                 device.values.update({p.epc: p.edt for p in frame.properties if p.edt})
                 device.available = True
                 return device
-        if not self._hosts:
+        if not self.hosts:
             self.rediscovery_requested = True
         return None
 

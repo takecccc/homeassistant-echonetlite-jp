@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..codec import CodecError, decode, primary
+from ..codec import CodecError, coefficient_lookup, decode, primary
 from ..device import DerivedSensor, EchonetDevice
 from ..errors import EchonetError
 from ..mra import ClassDef, Text
@@ -39,22 +40,36 @@ class _Field:
 
 @dataclass(frozen=True)
 class _ChannelList:
-    prefix: str
+    prefix: str  # derived keys are "<prefix><channel>_<field key>"
+    label: Text
     count_epc: int
     range_epc: int
     list_epc: int
     fields: tuple[_Field, ...]
 
 
+_SIMPLEX = Text("計測チャンネル", "Channel ")
+_DUPLEX = Text("双方向計測チャンネル", "Duplex channel ")
 _LISTS = (
     _ChannelList(
-        "ch", 0xB1, 0xB2, 0xB3, (_Field("energy", None, Text("積算電力量", "energy"), "kWh", True),)
+        "ch",
+        _SIMPLEX,
+        0xB1,
+        0xB2,
+        0xB3,
+        (_Field("energy", None, Text("積算電力量", "energy"), "kWh", True),),
     ),
     _ChannelList(
-        "ch", 0xB1, 0xB6, 0xB7, (_Field("power", None, Text("瞬時電力", "power"), "W", False),)
+        "ch",
+        _SIMPLEX,
+        0xB1,
+        0xB6,
+        0xB7,
+        (_Field("power", None, Text("瞬時電力", "power"), "W", False),),
     ),
     _ChannelList(
         "duplex",
+        _DUPLEX,
         0xB8,
         0xB9,
         0xBA,
@@ -76,14 +91,29 @@ _LISTS = (
         ),
     ),
     _ChannelList(
-        "duplex", 0xB8, 0xBD, 0xBE, (_Field("power", None, Text("瞬時電力", "power"), "W", False),)
+        "duplex",
+        _DUPLEX,
+        0xB8,
+        0xBD,
+        0xBE,
+        (_Field("power", None, Text("瞬時電力", "power"), "W", False),),
     ),
 )
-_FIELDS = {(lst.prefix, f.key): f for lst in _LISTS for f in lst.fields}
-_PREFIX_LABEL = {
-    "ch": Text("計測チャンネル", "Channel "),
-    "duplex": Text("双方向計測チャンネル", "Duplex channel "),
-}
+
+
+def _key(lst: _ChannelList, channel: int, fld: _Field) -> str:
+    return f"{lst.prefix}{channel}_{fld.key}"
+
+
+def _sensor(lst: _ChannelList, channel: int, fld: _Field) -> DerivedSensor:
+    return DerivedSensor(
+        key=_key(lst, channel, fld),
+        name=Text(
+            f"{lst.label.ja}{channel} {fld.name.ja}", f"{lst.label.en}{channel} {fld.name.en}"
+        ),
+        unit=fld.unit,
+        total_increasing=fld.cumulative,
+    )
 
 
 class PowerDistributionBoard:
@@ -107,7 +137,7 @@ class PowerDistributionBoard:
             for channel, item in channels.items():
                 for fld in lst.fields:
                     value = item.get(fld.item_name) if fld.item_name else item
-                    out[f"{lst.prefix}{channel}_{fld.key}"] = (
+                    out[_key(lst, channel, fld)] = (
                         value if isinstance(value, (int, float)) else None
                     )
         return out
@@ -119,39 +149,21 @@ class PowerDistributionBoard:
         exist from the start even when a lossy list read has not succeeded yet;
         channels seen in readings are added too, for boards without counts.
         """
-        keys = dict.fromkeys(self._expected_keys(device))
-        keys.update(dict.fromkeys(k for k in device.derived if _KEY_RE.match(k)))
-        out: list[DerivedSensor] = []
-        for key in keys:
-            match = _KEY_RE.match(key)
-            if not match or (fld := _FIELDS.get((match[1], match[3]))) is None:
-                continue
-            label = _PREFIX_LABEL[match[1]]
-            channel = match[2]
-            out.append(
-                DerivedSensor(
-                    key=key,
-                    name=Text(
-                        f"{label.ja}{channel} {fld.name.ja}", f"{label.en}{channel} {fld.name.en}"
-                    ),
-                    unit=fld.unit,
-                    total_increasing=fld.cumulative,
-                )
-            )
-        return out
-
-    @staticmethod
-    def _expected_keys(device: EchonetDevice) -> list[str]:
-        keys: list[str] = []
+        channels: dict[tuple[str, str], set[int]] = defaultdict(set)
         for lst in _LISTS:
-            if lst.list_epc not in device.info.maps.get:
-                continue
             count = device.decode(lst.count_epc)
-            if not isinstance(count, int):
-                continue
-            for channel in range(1, min(count, _MAX_CHANNELS) + 1):
-                keys.extend(f"{lst.prefix}{channel}_{fld.key}" for fld in lst.fields)
-        return keys
+            if lst.list_epc in device.info.maps.get and isinstance(count, int):
+                for fld in lst.fields:
+                    channels[lst.prefix, fld.key].update(range(1, min(count, _MAX_CHANNELS) + 1))
+        for key in device.derived:
+            if match := _KEY_RE.match(key):
+                channels[match[1], match[3]].add(int(match[2]))
+        return [
+            _sensor(lst, channel, fld)
+            for lst in _LISTS
+            for fld in lst.fields
+            for channel in sorted(channels.get((lst.prefix, fld.key), ()))
+        ]
 
 
 async def _read_list(
@@ -199,7 +211,7 @@ def _decode_list(device: EchonetDevice, epc: int, edt: bytes) -> tuple[int | Non
     prop = device.class_def.get(epc)
     if prop is None:
         return None, []
-    lookup = _coefficient_lookup(device)
+    lookup = coefficient_lookup(device.class_def, device.values)
     try:
         decoded = decode(prop.schema, edt, lookup)
     except CodecError:
@@ -213,14 +225,6 @@ def _decode_list(device: EchonetDevice, epc: int, edt: bytes) -> tuple[int | Non
         return None, decode(array_schema, edt, lookup)
     except CodecError:
         return None, []
-
-
-def _coefficient_lookup(device: EchonetDevice) -> Any:
-    def lookup(ref: int) -> float | None:
-        value = device.decode(ref)
-        return float(value) if isinstance(value, (int, float)) else None
-
-    return lookup
 
 
 def _max_range(class_def: ClassDef, range_epc: int) -> int:

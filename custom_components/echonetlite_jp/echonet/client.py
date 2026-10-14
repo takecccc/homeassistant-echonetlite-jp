@@ -22,6 +22,7 @@ from .transport import EchonetTransport
 
 _LOGGER = logging.getLogger(__name__)
 
+EPC_INSTALLATION_LOCATION = 0x81
 EPC_UID = 0x83
 EPC_MANUFACTURER = 0x8A
 EPC_PRODUCT_CODE = 0x8C

@@ -14,6 +14,7 @@ from custom_components.echonetlite_jp.echonet.codec import (
     fixed_size,
     is_binary_state,
     primary,
+    to_plain,
 )
 from custom_components.echonetlite_jp.echonet.mra import MraCatalog
 
@@ -184,3 +185,19 @@ def test_encode_rejects_unsupported_values() -> None:
 def test_unsupported_type() -> None:
     with pytest.raises(CodecError):
         decode({"type": "mystery"}, b"\x00")
+
+
+def test_to_plain() -> None:
+    value = {
+        "state": decode(primary(PDB.get(0x80).schema), b"\x30"),
+        "items": [b"\x01\xab", dt.date(2026, 10, 13), dt.time(8, 30)],
+        "when": dt.datetime(2026, 10, 13, 8, 30),
+        "number": 1.5,
+    }
+    assert to_plain(value, "en") == {
+        "state": "ON",
+        "items": ["01AB", "2026-10-13", "08:30:00"],
+        "when": "2026-10-13T08:30:00",
+        "number": 1.5,
+    }
+    assert to_plain(value["state"], "ja") == "ON"
