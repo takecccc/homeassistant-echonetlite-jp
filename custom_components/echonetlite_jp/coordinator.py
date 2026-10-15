@@ -11,7 +11,13 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, REDISCOVERY_COOLDOWN, REDISCOVERY_INTERVAL, STARTUP_REDISCOVERY
+from .const import (
+    CONF_GROUP_NAMES,
+    DOMAIN,
+    REDISCOVERY_COOLDOWN,
+    REDISCOVERY_INTERVAL,
+    STARTUP_REDISCOVERY,
+)
 from .echonet.device import EchonetDevice
 from .echonet.errors import EchonetError, EchonetTimeoutError
 from .echonet.network import EchonetNetwork
@@ -48,6 +54,11 @@ class EchonetCoordinator(DataUpdateCoordinator[dict[str, EchonetDevice]]):
     @property
     def language(self) -> str:
         return self.hass.config.language
+
+    def group_names(self, device_id: str) -> dict[str, list[str]]:
+        """User-given names for the device's sensor groups (e.g. circuits)."""
+        names: dict[str, dict[str, list[str]]] = self.config_entry.options.get(CONF_GROUP_NAMES, {})
+        return names.get(device_id, {})
 
     async def _async_update_data(self) -> dict[str, EchonetDevice]:
         now = dt_util.utcnow()

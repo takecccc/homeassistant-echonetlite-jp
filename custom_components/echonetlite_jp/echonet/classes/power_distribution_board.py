@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..codec import CodecError, coefficient_lookup, decode, primary
-from ..device import DerivedSensor, EchonetDevice
+from ..device import DerivedSensor, EchonetDevice, SensorGroup
 from ..errors import EchonetError
 from ..mra import ClassDef, Text
 
@@ -113,6 +113,8 @@ def _sensor(lst: _ChannelList, channel: int, fld: _Field) -> DerivedSensor:
         ),
         unit=fld.unit,
         total_increasing=fld.cumulative,
+        group=SensorGroup(lst.prefix, channel, lst.label),
+        measure=fld.name,
     )
 
 

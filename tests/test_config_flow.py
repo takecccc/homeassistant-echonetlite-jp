@@ -93,6 +93,10 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     )
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "connection"}
+    )
     assert result["type"] is FlowResultType.FORM
 
     result = await hass.config_entries.options.async_configure(
@@ -137,3 +141,14 @@ async def test_probe_against_a_node(loopback_sockets: None) -> None:
             assert await async_probe([FAKE_HOST], "") == 0
     finally:
         node.stop()
+
+
+async def test_group_names_need_a_loaded_entry(hass: HomeAssistant) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, version=2, options={})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "group_names"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "not_loaded"

@@ -17,6 +17,8 @@ PLATFORMS = [
 
 CONF_HOSTS = "hosts"
 CONF_INTERFACE = "interface"
+# {device id: {group kind: [name of 1, name of 2, ...]}}; "" keeps the default name.
+CONF_GROUP_NAMES = "group_names"
 
 DEFAULT_SCAN_INTERVAL = 30
 DISCOVERY_WAIT = 3.0

@@ -11,12 +11,14 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.echonetlite_jp import async_migrate_entry
 from custom_components.echonetlite_jp.const import DOMAIN
+from custom_components.echonetlite_jp.echonet.protocol import EOJ
 
 from .fake_node import FakeNode
 from .helpers import AIRCON, PDB, aircon, aircon_device, board, setup_integration
@@ -326,3 +328,74 @@ async def test_early_rediscovery_after_startup(hass: HomeAssistant, fake_node: F
     coordinator._next_discovery = coordinator._last_discovery  # due now
     await coordinator.async_refresh()
     assert coordinator._next_discovery - coordinator._last_discovery == timedelta(minutes=30)
+
+
+async def _open_group_names(hass: HomeAssistant, entry_id: str) -> dict:
+    result = await hass.config_entries.options.async_init(entry_id)
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "group_names"}
+    )
+
+
+async def test_channel_names(hass: HomeAssistant, fake_node: FakeNode) -> None:
+    entry = await setup_integration(hass, fake_node)
+    energy = "sensor.power_distribution_board_metering_ch1_energy"
+    assert hass.states.get(energy).attributes["friendly_name"].endswith("Channel 1 energy")
+
+    # a single board goes straight to the names form
+    result = await _open_group_names(hass, entry.entry_id)
+    assert result["step_id"] == "group_names_edit"
+    assert result["description_placeholders"]["groups"] == "Channel: 2"
+
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"ch": "a\nb\nc"})
+    assert result["errors"] == {"ch": "too_many_names"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"ch": "キッチン\n\n"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    # names apply after the reload; entity ids stay
+    assert hass.states.get(energy).attributes["friendly_name"] == (
+        "Power distribution board metering キッチン energy"
+    )
+    power = hass.states.get("sensor.power_distribution_board_metering_ch1_power")
+    assert power.attributes["friendly_name"].endswith("キッチン power")
+    ch2 = hass.states.get("sensor.power_distribution_board_metering_ch2_energy")
+    assert ch2.attributes["friendly_name"].endswith("Channel 2 energy")  # blank line
+
+    # the form shows the saved names; saving connection settings keeps them
+    result = await _open_group_names(hass, entry.entry_id)
+    assert result["data_schema"]({})["ch"] == "キッチン"
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "connection"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"hosts": "127.0.0.2", "interface": "", "scan_interval": 30}
+    )
+    await hass.async_block_till_done()
+    assert entry.options["group_names"] == {
+        entry.runtime_data.network.devices[next(iter(entry.options["group_names"]))].id: {
+            "ch": ["キッチン"]
+        }
+    }
+
+
+async def test_channel_names_choose_board(hass: HomeAssistant, fake_node: FakeNode) -> None:
+    fake_node.objects[EOJ(0x02, 0x87, 0x02)] = board()
+    entry = await setup_integration(hass, fake_node)
+    result = await _open_group_names(hass, entry.entry_id)
+    assert result["step_id"] == "group_names"
+    second = next(d for d in entry.runtime_data.network.devices.values() if d.eoj.instance == 2)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"device": second.id}
+    )
+    assert result["step_id"] == "group_names_edit"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"ch": "納戸"})
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.power_distribution_board_metering_2_ch1_energy")
+    assert state.attributes["friendly_name"].endswith("納戸 energy")
+    first = hass.states.get("sensor.power_distribution_board_metering_ch1_energy")
+    assert first.attributes["friendly_name"].endswith("Channel 1 energy")

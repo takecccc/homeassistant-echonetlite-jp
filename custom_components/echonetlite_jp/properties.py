@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -105,7 +105,14 @@ class PropertySpec:
     options: tuple[str, ...] | None = None
 
 
-def device_specs(device: EchonetDevice, language: str) -> list[PropertySpec]:
+GroupNames = Mapping[str, Sequence[str]]
+
+
+def device_specs(
+    device: EchonetDevice, language: str, group_names: GroupNames | None = None
+) -> list[PropertySpec]:
+    """Entities for a device. ``group_names`` are user-given names of sensor
+    groups (e.g. circuits), by group kind, in index order."""
     specs: list[PropertySpec] = []
     for epc in device.poll_epcs():
         prop = device.class_def.get(epc)
@@ -114,7 +121,10 @@ def device_specs(device: EchonetDevice, language: str) -> list[PropertySpec]:
             hints = {"enabled": False, **hints}
         specs.extend(_apply_hints(spec, hints) for spec in _property_specs(device, epc, language))
     if device.extension is not None:
-        specs.extend(_derived_spec(sensor, language) for sensor in device.extension.sensors(device))
+        specs.extend(
+            _derived_spec(sensor, language, group_names or {})
+            for sensor in device.extension.sensors(device)
+        )
     return specs
 
 
@@ -359,13 +369,18 @@ def _numeric_attrs(
     return attrs
 
 
-def _derived_spec(sensor: DerivedSensor, language: str) -> PropertySpec:
+def _derived_spec(sensor: DerivedSensor, language: str, group_names: GroupNames) -> PropertySpec:
     unit, device_class = _UNITS.get(sensor.unit or "", (sensor.unit, None))
+    name = sensor.name.get(language)
+    if sensor.group is not None and sensor.measure is not None:
+        names = group_names.get(sensor.group.kind, ())
+        if sensor.group.index <= len(names) and (custom := names[sensor.group.index - 1]):
+            name = f"{custom} {sensor.measure.get(language)}"
     return PropertySpec(
         platform=Platform.SENSOR,
         key=sensor.key,
-        object_id=sensor.key,
-        name=sensor.name.get(language),
+        object_id=sensor.key,  # stays stable when the user names the group
+        name=name,
         derived_key=sensor.key,
         unit=unit,
         device_class=device_class,

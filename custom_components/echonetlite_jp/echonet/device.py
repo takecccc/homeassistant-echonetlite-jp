@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class SensorGroup:
+    """Sensors that belong to one numbered thing the user may name,
+    such as one circuit of a distribution board."""
+
+    kind: str  # e.g. "ch"; the same kind is numbered from 1
+    index: int
+    label: Text  # the kind without number, e.g. "計測チャンネル"
+
+
+@dataclass(frozen=True)
 class DerivedSensor:
     """A value a class extension computes beyond plain EPCs."""
 
@@ -22,6 +32,8 @@ class DerivedSensor:
     name: Text
     unit: str | None
     total_increasing: bool = False
+    group: SensorGroup | None = None
+    measure: Text | None = None  # the name without the group, e.g. "積算電力量"
 
 
 class ClassExtension(Protocol):
@@ -67,6 +79,17 @@ class EchonetDevice:
             return decode_property(self.class_def, epc, self.values)
         except CodecError:
             return None
+
+    def sensor_groups(self) -> dict[str, tuple[Text, int]]:
+        """Nameable groups of the extension's sensors: kind -> (label, count)."""
+        groups: dict[str, tuple[Text, int]] = {}
+        if self.extension is None:
+            return groups
+        for sensor in self.extension.sensors(self):
+            if (group := sensor.group) is not None:
+                count = max(group.index, groups.get(group.kind, (group.label, 0))[1])
+                groups[group.kind] = (group.label, count)
+        return groups
 
     def poll_epcs(self) -> list[int]:
         """Readable EPCs worth polling for state."""

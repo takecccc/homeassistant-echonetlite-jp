@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from unittest.mock import patch
 
 import pytest
 from pytest_socket import socket_allow_hosts
@@ -14,6 +15,7 @@ from .fake_node import FAKE_HOST, FakeNode
 @pytest.fixture(autouse=True)
 def stop_fake_nodes() -> Iterator[None]:
     yield
+    patch.stopall()  # patches started by helpers.setup_integration
     while FakeNode.running:
         FakeNode.running.pop().stop()
 

@@ -88,7 +88,8 @@ def async_setup_platform(
     def add_new() -> None:
         new: list[Entity] = []
         for device in coordinator.network.devices.values():
-            for spec in device_specs(device, coordinator.language):
+            names = coordinator.group_names(device.id)
+            for spec in device_specs(device, coordinator.language, names):
                 uid = f"{device.id}-{spec.key}"
                 if spec.platform is platform and uid not in known:
                     known.add(uid)

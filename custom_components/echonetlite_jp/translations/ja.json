@@ -29,6 +29,12 @@
   "options": {
     "step": {
       "init": {
+        "menu_options": {
+          "connection": "接続設定",
+          "group_names": "チャンネル名"
+        }
+      },
+      "connection": {
         "data": {
           "hosts": "ホスト",
           "interface": "ネットワークインターフェースのアドレス",
@@ -38,12 +44,32 @@
           "hosts": "IPv4 アドレスをカンマ区切りで指定。空欄で自動検出。",
           "interface": "マルチキャストに使うインターフェースの IPv4 アドレス。空欄で既定。",
           "scan_interval": "全機器の値を取得する間隔。"
+        },
+        "title": "接続設定"
+      },
+      "group_names": {
+        "title": "チャンネル名",
+        "data": {
+          "device": "機器"
+        }
+      },
+      "group_names_edit": {
+        "title": "チャンネル名",
+        "description": "{device} のチャンネルに名前を付けます。1 行に 1 つ、1 行目がチャンネル 1 です。空行のチャンネルは既定の名前のままです。\n\nチャンネル数: {groups}",
+        "data": {
+          "ch": "計測チャンネル",
+          "duplex": "双方向計測チャンネル"
         }
       }
     },
     "error": {
       "invalid_host": "IPv4 アドレスをカンマ区切りで入力してください。",
-      "invalid_interface": "ローカルインターフェースの IPv4 アドレスを入力してください。"
+      "invalid_interface": "ローカルインターフェースの IPv4 アドレスを入力してください。",
+      "too_many_names": "チャンネル数より多くの名前があります。"
+    },
+    "abort": {
+      "not_loaded": "統合が読み込まれていません。",
+      "no_groups": "名前を付けられるチャンネルを持つ機器がありません。"
     }
   },
   "services": {
@@ -51,17 +77,32 @@
       "name": "プロパティ取得",
       "description": "機器のプロパティ (EPC) を 1 つ読み出し、生データとデコード結果を返します。",
       "fields": {
-        "device_id": {"name": "機器", "description": "読み出す ECHONET Lite 機器。"},
-        "epc": {"name": "EPC", "description": "プロパティコード (16進数、例: 0x80)。"}
+        "device_id": {
+          "name": "機器",
+          "description": "読み出す ECHONET Lite 機器。"
+        },
+        "epc": {
+          "name": "EPC",
+          "description": "プロパティコード (16進数、例: 0x80)。"
+        }
       }
     },
     "set_property": {
       "name": "プロパティ設定",
       "description": "機器のプロパティ (EPC) に生データ (EDT) を書き込みます。",
       "fields": {
-        "device_id": {"name": "機器", "description": "書き込む ECHONET Lite 機器。"},
-        "epc": {"name": "EPC", "description": "プロパティコード (16進数、例: 0x80)。"},
-        "edt": {"name": "EDT", "description": "データ (16進数、例: 30)。"}
+        "device_id": {
+          "name": "機器",
+          "description": "書き込む ECHONET Lite 機器。"
+        },
+        "epc": {
+          "name": "EPC",
+          "description": "プロパティコード (16進数、例: 0x80)。"
+        },
+        "edt": {
+          "name": "EDT",
+          "description": "データ (16進数、例: 30)。"
+        }
       }
     }
   }

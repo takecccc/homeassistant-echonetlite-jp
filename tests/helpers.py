@@ -72,22 +72,25 @@ async def setup_integration(
         options={CONF_HOSTS: [FAKE_HOST], CONF_INTERFACE: "", CONF_SCAN_INTERVAL: 30},
     )
     entry.add_to_hass(hass)
-    with (
-        patch(
+    # Kept active for the whole test (stopped in conftest) so reloads, e.g.
+    # after an options change, also talk to the fake node.
+    for target, replacement in (
+        (
             "custom_components.echonetlite_jp.EchonetTransport",
             partial(EchonetTransport, bind_host="127.0.0.1", port=port, multicast=False),
         ),
-        patch(
+        (
             "custom_components.echonetlite_jp.EchonetClient",
             partial(EchonetClient, timeout=0.2, retries=0),
         ),
-        patch(
+        (
             "custom_components.echonetlite_jp.MraCatalog",
             partial(MraCatalog, quirks_dir=quirks_dir),
         ),
     ):
-        await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
+        patch(target, replacement).start()
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
     return entry
 
 
