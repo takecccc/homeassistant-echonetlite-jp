@@ -1,0 +1,132 @@
+{
+  "description": "MRA 1.3.1 omits the demand power units (0xC5, 0xC7) and the coefficient (0xD3, 0xD4) for the demand values of class 0x028A, although 0xC5/0xC7 are documented as their units. Same references as the bidirectional meter 0x028F.",
+  "match": {
+    "eoj": "0x028A"
+  },
+  "elProperties": [
+    {
+      "epc": "0xC1",
+      "data": {
+        "oneOf": [
+          {
+            "$ref": "#/definitions/number_0-99999999kW",
+            "coefficient": [
+              "0xC5",
+              "0xD3",
+              "0xD4"
+            ]
+          },
+          {
+            "$ref": "#/definitions/state_NoData_FFFFFFFE"
+          }
+        ]
+      }
+    },
+    {
+      "epc": "0xC2",
+      "data": {
+        "$ref": "#/definitions/number_0-99999999kW",
+        "overflowCode": false,
+        "underflowCode": false,
+        "coefficient": [
+          "0xC7",
+          "0xD3",
+          "0xD4"
+        ]
+      }
+    },
+    {
+      "epc": "0xC3",
+      "data": {
+        "type": "object",
+        "properties": [
+          {
+            "elementName": {
+              "ja": "計測日時",
+              "en": "Date and time of measurement"
+            },
+            "shortName": "dateAndTime",
+            "element": {
+              "type": "date-time"
+            }
+          },
+          {
+            "elementName": {
+              "ja": "需要電力",
+              "en": "Electric Power demand"
+            },
+            "shortName": "electricPower",
+            "element": {
+              "oneOf": [
+                {
+                  "$ref": "#/definitions/number_0-99999999kW",
+                  "coefficient": [
+                    "0xC5",
+                    "0xD3",
+                    "0xD4"
+                  ]
+                },
+                {
+                  "$ref": "#/definitions/state_NoData_FFFFFFFE"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "epc": "0xC6",
+      "data": {
+        "type": "object",
+        "properties": [
+          {
+            "elementName": {
+              "ja": "積算履歴収集日",
+              "en": "Day for which the historical data of measured cumulative amounts of electric energy is to be retrieved"
+            },
+            "shortName": "day",
+            "element": {
+              "oneOf": [
+                {
+                  "$ref": "#/definitions/number_0-99_u16"
+                },
+                {
+                  "$ref": "#/definitions/state_DefaultValue_00FF"
+                }
+              ]
+            }
+          },
+          {
+            "elementName": {
+              "ja": "需要電力",
+              "en": "Electric power demand"
+            },
+            "shortName": "electricPower",
+            "element": {
+              "type": "array",
+              "itemSize": 4,
+              "minItems": 48,
+              "maxItems": 48,
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/definitions/number_0-99999999kW",
+                    "coefficient": [
+                      "0xC5",
+                      "0xD3",
+                      "0xD4"
+                    ]
+                  },
+                  {
+                    "$ref": "#/definitions/state_NoData_FFFFFFFE"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

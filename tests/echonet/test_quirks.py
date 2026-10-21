@@ -221,3 +221,30 @@ async def test_network_uses_quirks(
     await network.async_poll()
     assert device.decode(0xF0) == 100
     assert {len(frame.properties) for frame in fake_node.requests} == {1}
+
+
+def test_bundled_high_voltage_meter_demand_units() -> None:
+    """0x028A demand values use their units (0xC5/0xC7) and the coefficient
+    (0xD3 x 0xD4), as documented; MRA 1.3.1 lacks these references."""
+    catalog = MraCatalog()
+    meter = catalog.get_device_class(DeviceKey(0x028A))
+    assert meter.quirks == ("0x028A_demand_power_units.json",)
+    assert {0xC5, 0xC7, 0xD3, 0xD4} <= meter.coefficient_epcs
+
+    values = {
+        0xC1: (1234).to_bytes(4, "big"),  # monthly maximum demand
+        0xC2: (5678).to_bytes(4, "big"),  # cumulative maximum demand
+        0xC5: b"\x01",  # demand unit 0.1
+        0xC7: b"\x02",  # cumulative demand unit 0.01
+        0xD3: (2).to_bytes(4, "big"),  # coefficient
+        0xD4: b"\x00",  # coefficient multiplier x1
+    }
+    assert decode_property(meter, 0xC1, values) == pytest.approx(246.8)
+    assert decode_property(meter, 0xC2, values) == pytest.approx(113.56)
+
+    # history: the collection day is a plain number, the items are scaled
+    history = bytes([0x00, 0x05]) + b"".join((10 * n).to_bytes(4, "big") for n in range(48))
+    decoded = decode_property(meter, 0xC6, {**values, 0xC6: history})
+    day, items = list(decoded.values())
+    assert day == 5
+    assert items[1] == pytest.approx(2.0)
