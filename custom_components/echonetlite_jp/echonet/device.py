@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .client import IDENTIFICATION_EPCS, PROPERTY_MAP_EPCS, ObjectInfo
-from .codec import CodecError, decode_property
+from .codec import CodecError, CoefficientLookup, coefficient_lookup, decode_property
 from .mra import ClassDef, Text
 from .protocol import EOJ
 
@@ -76,9 +76,13 @@ class EchonetDevice:
     def decode(self, epc: int) -> Any:
         """Decoded value of ``epc`` or None when missing/undecodable."""
         try:
-            return decode_property(self.class_def, epc, self.values)
+            return decode_property(self.class_def, epc, self.values, self.info.maps.get)
         except CodecError:
             return None
+
+    def coefficients(self) -> CoefficientLookup:
+        """Coefficient lookup for decoding values of this device by hand."""
+        return coefficient_lookup(self.class_def, self.values, self.info.maps.get)
 
     def sensor_groups(self) -> dict[str, tuple[Text, int]]:
         """Nameable groups of the extension's sensors: kind -> (label, count)."""

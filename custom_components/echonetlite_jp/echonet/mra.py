@@ -12,6 +12,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,26 @@ class ClassDef:
 
     def get(self, epc: int) -> PropertyDef | None:
         return self.properties.get(epc)
+
+    @cached_property
+    def coefficient_epcs(self) -> frozenset[int]:
+        """EPCs other properties refer to as coefficients (units, multipliers)."""
+        found: set[int] = set()
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                for ref in node.get("coefficient") or []:
+                    if (epc := _parse_epc(ref)) is not None:
+                        found.add(epc)
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        for prop in self.properties.values():
+            walk(prop.schema)
+        return frozenset(found)
 
     @property
     def atomic_epcs(self) -> frozenset[int]:

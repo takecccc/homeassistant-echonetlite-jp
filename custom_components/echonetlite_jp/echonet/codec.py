@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -306,31 +306,50 @@ _DECODERS: dict[str, Callable[[Schema, bytes, CoefficientLookup | None], Any]] =
 }
 
 
-def coefficient_lookup(class_def: ClassDef, values: Mapping[int, bytes]) -> CoefficientLookup:
+def coefficient_lookup(
+    class_def: ClassDef,
+    values: Mapping[int, bytes],
+    readable: Collection[int] = frozenset(),
+) -> CoefficientLookup:
     """Resolve coefficient references (e.g. 0xC2 "unit for cumulative energy")
-    from a device's other property values."""
+    from a device's other property values.
+
+    A coefficient the device does not have counts as 1. One it has
+    (``readable``) but whose value is not known raises CodecError: scaling by 1
+    instead would report e.g. cumulative energy 100 times too large.
+    """
 
     def lookup(ref: int) -> float | None:
         ref_prop = class_def.get(ref)
         ref_edt = values.get(ref)
-        if ref_prop is None or ref_edt is None:
-            return None
-        try:
-            value = decode(ref_prop.schema, ref_edt)  # coefficients have no coefficients
-        except CodecError:
-            return None
-        return float(value) if isinstance(value, (int, float)) else None
+        value: Any = None
+        if ref_prop is not None and ref_edt is not None:
+            try:
+                value = decode(ref_prop.schema, ref_edt)  # coefficients have no coefficients
+            except CodecError:
+                value = None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if ref in readable:
+            raise CodecError(f"coefficient 0x{ref:02X} is not known")
+        return None
 
     return lookup
 
 
-def decode_property(class_def: ClassDef, epc: int, values: Mapping[int, bytes]) -> Any:
-    """Decode a property of a device, applying coefficients from its other values."""
+def decode_property(
+    class_def: ClassDef,
+    epc: int,
+    values: Mapping[int, bytes],
+    readable: Collection[int] = frozenset(),
+) -> Any:
+    """Decode a property of a device, applying coefficients from its other
+    values (``readable``: the EPCs the device can report, see coefficient_lookup)."""
     prop = class_def.get(epc)
     edt = values.get(epc)
     if prop is None or edt is None:
         raise CodecError(f"no definition or value for 0x{epc:02X}")
-    return decode(prop.schema, edt, coefficient_lookup(class_def, values))
+    return decode(prop.schema, edt, coefficient_lookup(class_def, values, readable))
 
 
 def to_plain(value: Any, language: str) -> Any:

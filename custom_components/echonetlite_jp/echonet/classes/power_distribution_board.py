@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..codec import CodecError, coefficient_lookup, decode, primary
+from ..codec import CodecError, decode, primary
 from ..device import DerivedSensor, EchonetDevice, SensorGroup
 from ..errors import EchonetError
 from ..mra import ClassDef, Text
@@ -213,7 +213,7 @@ def _decode_list(device: EchonetDevice, epc: int, edt: bytes) -> tuple[int | Non
     prop = device.class_def.get(epc)
     if prop is None:
         return None, []
-    lookup = coefficient_lookup(device.class_def, device.values)
+    lookup = device.coefficients()
     try:
         decoded = decode(prop.schema, edt, lookup)
     except CodecError:

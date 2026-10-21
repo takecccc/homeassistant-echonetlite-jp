@@ -207,3 +207,33 @@ async def test_channel_sensors_exist_before_lists_are_read(
     await network.async_poll()
     assert device.derived["ch3_power"] == 30
     assert {sensor.key for sensor in device.extension.sensors(device)} == keys
+
+
+async def test_missing_unit_never_scales_energy_wrongly(
+    echonet: EchonetClient, fake_node: FakeNode
+) -> None:
+    """Losing 0xC2 (unit 0.1 kWh) in one poll must not report the raw value
+    (10x too large) for cumulative energy, neither for 0xC0 nor per channel."""
+    fake_node.objects[PDB] = _pdb(2)
+    network = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    [device] = await network.async_discover()
+    await network.async_poll()
+    assert device.decode(0xC0) == 0.5
+    assert device.derived["ch2_energy"] == 20.0
+
+    fake_node.ignored_epcs = {0xC2}  # the unit is lost in this poll
+    await network.async_poll()
+    assert device.decode(0xC0) == 0.5
+    assert device.derived["ch2_energy"] == 20.0
+
+
+async def test_unknown_unit_gives_no_value(echonet: EchonetClient, fake_node: FakeNode) -> None:
+    """Without the unit, cumulative energy is unknown rather than unscaled."""
+    fake_node.objects[PDB] = _pdb(2)
+    fake_node.ignored_epcs = {0xC2}
+    network = EchonetNetwork(echonet, CATALOG, hosts=[FAKE_HOST])
+    [device] = await network.async_discover()
+    await network.async_poll()
+    assert device.decode(0xC0) is None
+    assert device.derived.get("ch2_energy") is None
+    assert device.derived["ch2_power"] == 20  # power has no unit coefficient

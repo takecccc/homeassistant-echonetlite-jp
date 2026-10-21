@@ -83,7 +83,9 @@ class EchonetNetwork:
                     self.rediscovery_requested = True
             device.available = False
             return
-        for epc in result.missing:
+        # Coefficients (units, multipliers) do not change: keep the last value
+        # rather than scaling energy readings wrongly after one lost answer.
+        for epc in result.missing - device.class_def.coefficient_epcs:
             device.values.pop(epc, None)
         device.values.update(result.values)
         if not device.available:
